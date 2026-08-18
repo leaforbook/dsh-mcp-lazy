@@ -1,12 +1,12 @@
 # @xiaoyilin/dsh-mcp-lazy
 
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的按需 MCP 桥接插件。它不会在启动时把 MCP 服务器的全部工具塞进工具目录，而是先为每个服务器注册 `activate` 和 `deactivate` 两个控制工具。需要用哪个服务器，再临时连接并加载它的工具；本轮结束后自动卸载。
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的按需 MCP 桥接插件。它不会在启动时把 MCP 服务器的全部工具塞进工具目录，而是为每个服务器保留 `activate` 和 `deactivate` 两个控制工具，并在同一工具域共享一个 `mcp__router__search_and_activate` 路由工具。需要哪个服务器时，可让路由器搜索并激活，也可明确调用服务器自己的 `activate`；本轮结束后立即卸载远端工具 Schema，默认将连接保温 5 分钟以便下一轮复用。
 
 这样做主要是为了少占 TOKEN。工具的名称、说明和参数结构会随模型请求一起进入上下文。MCP 服务器越多、工具定义越长，常驻目录消耗的输入 TOKEN 就越多。这个插件让没用到的工具不进入当轮请求。
 
 ## 工具定义本身能少多少 TOKEN
 
-下面的数据来自三个真实 MCP 服务器，测试时间为 2026-08-18。“全量常驻”按 `@deepseek-ai/dsh-mcp-client` 的方式统计，“按需模式”使用本插件未激活时的两个控制工具。TOKEN 使用 `cl100k_base` 统一计算，适合比较工具定义的前后差额。
+下面的数据来自三个真实 MCP 服务器，测试时间为 2026-08-18。“全量常驻”按 `@deepseek-ai/dsh-mcp-client` 的方式统计，“按需模式”按每个服务器未激活时的两个专用控制工具统计。0.4.0 新增的共享路由工具是整个 DSH 工具域一份固定开销，未计入各服务器行。TOKEN 使用 `cl100k_base` 统一计算，适合比较工具定义的前后差额。
 
 | MCP 服务器 | 全量常驻 | 按需模式未激活 | 全量工具定义 | 按需工具定义 | 每轮减少 | 工具定义降幅 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -38,7 +38,8 @@
 
 - 服务器未激活时，目录里只有两个控制工具，省得最多。
 - 激活服务器后，它的全部工具会在当前轮注册；这一轮仍要承担该服务器的工具定义 TOKEN。
-- 默认会在轮次结束时卸载工具，下一轮恢复到两个控制工具。
+- 默认会在轮次结束时立即卸载远端工具 Schema；专用控制工具和共享路由器仍然可用。
+- 默认连接继续保温 5 分钟。保温期内再次激活会直接复用内存目录和现有连接，不重新启动 MCP 进程。
 - 如果服务器本来只有一两个很短的工具，按需模式的 TOKEN 优势可能很小。
 - `autoActivate: true` 会在启动时直接连接服务器，相当于关闭懒加载，不再节省这部分 TOKEN。
 
@@ -68,7 +69,9 @@ dsh plugin --profile web add -w github:leaforbook/dsh-mcp-lazy
         maxToolListPages: 100        # 最多读取的工具目录页数，默认 100
         reconnectAttempts: 1         # 意外断开后的有限重连次数，默认 1
         autoActivate: false          # 是否在启动时直接连接，默认 false
-        releaseOnTurnEnd: true       # 是否在轮次结束后断开，默认 true
+        releaseOnTurnEnd: true       # 是否在轮次结束后卸载远端工具 Schema，默认 true
+        warmIdleMs: 300000           # Schema 卸载后连接保温时长，默认 5 分钟
+        routingHints: [文件, 目录]    # 供共享路由器匹配的提示词，默认 []
 
     - id: mcp-lazy
       name: '@xiaoyilin/dsh-mcp-lazy'
@@ -77,6 +80,8 @@ dsh plugin --profile web add -w github:leaforbook/dsh-mcp-lazy
         serverName: remote-api
         url: http://127.0.0.1:8000/mcp
         headers: {}
+        warmIdleMs: 300000
+        routingHints: [远程接口, API]
 ```
 
 ### 配置项
@@ -93,21 +98,24 @@ dsh plugin --profile web add -w github:leaforbook/dsh-mcp-lazy
 | `maxToolListPages` | number | `100` | 一次目录发现最多读取的页数；重复游标、重名工具或超限都会中止。 |
 | `reconnectAttempts` | number | `1` | 意外断开且仍有活跃会话时的自动重连次数。设为 `0` 可关闭；成功调用工具后恢复预算。 |
 | `autoActivate` | boolean | `false` | 启动时直接连接服务器。开启后不再按需加载。 |
-| `releaseOnTurnEnd` | boolean | `true` | 本轮结束且没有会话继续使用时，自动断开服务器并卸载工具。 |
+| `releaseOnTurnEnd` | boolean | `true` | 本轮结束且没有会话继续使用时，立即卸载远端工具 Schema。设为 `false` 时保持 0.3.x 的常驻发布行为。 |
+| `warmIdleMs` | number | `300000` | Schema 卸载后的连接保温时长，单位为毫秒。仅接受非负整数，无效值回退为 5 分钟；设为 `0` 可恢复 0.3.x 的轮末立即关闭连接行为。 |
+| `routingHints` | string[] | `[]` | 共享路由器用于匹配服务器的关键词，例如业务名称、能力或自然语言别名。 |
 
 ## 工作原理
 
-1. 每个服务器先注册 `mcp__<server>__activate` 和 `mcp__<server>__deactivate` 两个控制工具。
-2. 调用 `activate` 后，插件通过 `stdio` 或 `streamable-http` 连接服务器，带超时和页数上限分页读取 `tools/list`，再注册服务器提供的全部工具。激活结果只返回工具数量，不重复输出完整名称列表。
+1. 同一 DSH 工具域只注册一个 `mcp__router__search_and_activate`，每个服务器仍保留 `mcp__<server>__activate` 和 `mcp__<server>__deactivate`。路由器依次参考精确 `serverName`、完整工具前缀、`routingHints` 和已缓存目录；零匹配或最高分并列时拒绝猜测，不会激活任何服务器。
+2. 路由器选中服务器或明确调用 `activate` 后，插件通过 `stdio` 或 `streamable-http` 连接服务器，带超时和页数上限分页读取 `tools/list`，再注册服务器提供的全部工具。激活结果只返回工具数量，不重复输出完整名称列表。
 3. 工具名沿用 `dsh-mcp-client` 的规则：`mcp__<server>__<tool>`。名称只保留 `[A-Za-z0-9_-]`，最长 64 个字符；出现冲突时追加 12 位哈希。
-4. 默认在 `agent/turn-stopping` 时释放本轮占用。`agent/disposed` 负责处理会话直接结束的情况。
-5. 收到 `tools/list/changed` 后，插件先完整拉取并验证新目录，再按指纹差量更新：未变化的工具不重复注册，刷新失败则保留最后一次可用目录。并发通知会合并，刷新期间的新通知会在本次完成后再同步一次。
+4. 默认在 `agent/turn-stopping` 时立即卸载远端工具 Schema，并把连接保温 `warmIdleMs`；保温期再次激活会直接从内存目录恢复 Schema。`agent/disposed` 负责处理会话直接结束的情况，显式 `deactivate` 和插件销毁始终立即关闭连接。
+5. 收到 `tools/list/changed` 后，插件先完整拉取并验证新目录，再按指纹差量更新：未变化的工具不重复注册，刷新失败则保留最后一次可用目录。保温且没有活跃使用者时只更新内存目录，不重新发布 Schema；并发通知会合并，刷新期间的新通知会在本次完成后再同步一次。
 6. 连接意外断开时会立即卸载失效工具。仍有活跃会话（或启用了 `autoActivate`）时，插件按 `reconnectAttempts` 做有限自动重连，不会无限后台循环。
 
 ## 限制
 
 - 不支持必须以任务方式执行的工具，即 `tool.execution.taskSupport === 'required'`。遇到这类工具会直接返回错误。
 - 自动重连是有界的，且只在仍有连接需求时发生。超过预算后需重新调用 `activate`；成功调用任一服务器工具会恢复重连预算。
+- 保温只复用当前进程内的连接和工具目录，不写磁盘；进程重启后仍需重新发现。
 - TOKEN 数据是工具定义的近似值，不代表请求的全部输入，也不能直接换算成账单金额。
 
 ## 测试

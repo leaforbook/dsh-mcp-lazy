@@ -1,6 +1,6 @@
 {
   "name": "@xiaoyilin/dsh-mcp-lazy",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Lazy MCP bridge for DeepSeek Harness: servers connect on demand — only two lightweight activate/deactivate control tools are registered up front. · DSH 按需 MCP 桥接：平时只注册激活/停用控制工具，模型调用时才连接服务器并注册其全部工具。",
   "type": "module",
   "main": "lib/index.js",

@@ -282,6 +282,55 @@ test('agent disposal releases a persistent connection after turn stopping remove
   }
 })
 
+test('warm-idle refresh after persistent agent disposal updates catalog without publishing schemas', async () => {
+  const adapter = createAdapter()
+  const client = createClient('persistent-warm-refresh')
+  let handlers
+  let discoveryAttempts = 0
+  const runtime = createServerRuntime(runtimeOptions({
+    adapter,
+    config: {
+      serverName: 'runtime-fixture',
+      autoActivate: false,
+      releaseOnTurnEnd: false,
+      warmIdleMs: 500
+    },
+    async createConnectedClient(_signal, callbacks) {
+      handlers = callbacks
+      return client
+    },
+    async discoverDefinitions() {
+      discoveryAttempts += 1
+      return discoveryAttempts === 1 ? catalog('persistent-tool') : catalog('refreshed-tool')
+    }
+  }))
+
+  try {
+    const agent = { id: 'persistent-agent' }
+    await runtime.activate(agent)
+    runtime.onTurnStopping({ agent })
+    assert.ok(adapter.definitions.has('persistent-tool'), 'turn stop preserves persistent schemas')
+
+    runtime.onAgentDisposed({ agent })
+    assert.equal(adapter.definitions.size, 0, 'last-agent disposal enters schema-free warm idle')
+    assert.equal(client.closeCalls, 0, 'positive warm TTL keeps the connection open')
+
+    await handlers.onToolsChanged(client)
+
+    assert.deepEqual(runtime.getCatalog(), [
+      { name: 'refreshed-tool', description: 'refreshed-tool description' }
+    ])
+    assert.equal(adapter.definitions.size, 0, 'warm-idle refresh must not republish schemas')
+    assert.equal(client.closeCalls, 0, 'refresh must not end warm idle')
+
+    await runtime.activate({ id: 'next-agent' })
+    assert.deepEqual([...adapter.definitions.keys()], ['refreshed-tool'])
+    assert.equal(client.closeCalls, 0, 'genuine activation reuses the warm connection')
+  } finally {
+    await runtime.dispose()
+  }
+})
+
 test('delayed duplicate agent disposal does not extend an active warm-idle deadline', async () => {
   const adapter = createAdapter()
   const client = createClient('warm-disposed')
