@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { createDshAdapter } from '../lib/dsh-adapter.js'
+import { registerRouterServer } from '../lib/tool-router.js'
 
 function supportedContext() {
   const calls = []
@@ -36,6 +37,43 @@ test('supported DSH context is exposed through the stable adapter contract', () 
     ['effect', 'state'],
     ['warn', 'message']
   ])
+})
+
+test('Cordis service proxies share one router registration', () => {
+  const definitions = new Map()
+  const originalTools = {
+    register(definition) {
+      if (definitions.has(definition.name)) throw new Error(`duplicate tool: ${definition.name}`)
+      definitions.set(definition.name, definition)
+      return () => definitions.delete(definition.name)
+    }
+  }
+  const context = () => ({
+    ...supportedContext(),
+    tools: new Proxy(originalTools, {
+      get(target, property, receiver) {
+        if (property === Symbol.for('cordis.original')) return target
+        return Reflect.get(target, property, receiver)
+      }
+    })
+  })
+  const unregisterFirst = registerRouterServer(createDshAdapter(context()), {
+    serverName: 'first',
+    routingHints: [],
+    getCatalog: () => [],
+    activate: async () => 'first active'
+  })
+  const unregisterSecond = registerRouterServer(createDshAdapter(context()), {
+    serverName: 'second',
+    routingHints: [],
+    getCatalog: () => [],
+    activate: async () => 'second active'
+  })
+
+  assert.deepEqual([...definitions.keys()], ['mcp__router__search_and_activate'])
+  unregisterSecond()
+  unregisterFirst()
+  assert.equal(definitions.size, 0)
 })
 
 for (const [name, mutate, missing] of [
