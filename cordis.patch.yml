@@ -1,5 +1,0 @@
-# dsh bundle patch: inserts this plugin into a profile's layer stack.
-# Add one insert entry per MCP server (each entry is one lazy-bridge instance).
-- insert:
-    - id: mcp-lazy
-      name: '@xiaoyilin/dsh-mcp-lazy'

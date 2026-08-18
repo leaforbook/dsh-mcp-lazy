@@ -45,7 +45,7 @@
 ## 安装
 
 ```sh
-dsh plugin --profile web add github:leaforbook/dsh-mcp-lazy
+dsh plugin --profile web add -w github:leaforbook/dsh-mcp-lazy
 ```
 
 本项目直接通过 GitHub 分发，不发布到 npm。
@@ -63,6 +63,10 @@ dsh plugin --profile web add github:leaforbook/dsh-mcp-lazy
         serverName: filesystem
         command: npx
         args: [-y, '@modelcontextprotocol/server-filesystem', '/tmp']
+        connectTimeoutMs: 30000      # 建立连接超时，默认 30 秒
+        discoveryTimeoutMs: 60000    # 每页 tools/list 超时，默认 60 秒
+        maxToolListPages: 100        # 最多读取的工具目录页数，默认 100
+        reconnectAttempts: 1         # 意外断开后的有限重连次数，默认 1
         autoActivate: false          # 是否在启动时直接连接，默认 false
         releaseOnTurnEnd: true       # 是否在轮次结束后断开，默认 true
 
@@ -84,22 +88,36 @@ dsh plugin --profile web add github:leaforbook/dsh-mcp-lazy
 | `command` / `args` / `env` / `cwd` | — | — | `stdio` 启动参数。`env` 会合并到脱敏后的父进程环境。 |
 | `url` / `headers` | — | — | `streamable-http` 的服务地址和请求头。 |
 | `toolCallTimeoutMs` | number | `60000` | 单次工具调用超时，单位为毫秒。 |
+| `connectTimeoutMs` | number | `30000` | 建立 MCP 连接的超时，单位为毫秒。 |
+| `discoveryTimeoutMs` | number | `60000` | 单页 `tools/list` 请求的超时，单位为毫秒；激活流程另有略短于 180 秒控制工具超时的总 deadline。 |
+| `maxToolListPages` | number | `100` | 一次目录发现最多读取的页数；重复游标、重名工具或超限都会中止。 |
+| `reconnectAttempts` | number | `1` | 意外断开且仍有活跃会话时的自动重连次数。设为 `0` 可关闭；成功调用工具后恢复预算。 |
 | `autoActivate` | boolean | `false` | 启动时直接连接服务器。开启后不再按需加载。 |
 | `releaseOnTurnEnd` | boolean | `true` | 本轮结束且没有会话继续使用时，自动断开服务器并卸载工具。 |
 
 ## 工作原理
 
 1. 每个服务器先注册 `mcp__<server>__activate` 和 `mcp__<server>__deactivate` 两个控制工具。
-2. 调用 `activate` 后，插件通过 `stdio` 或 `streamable-http` 连接服务器，分页读取 `tools/list`，再注册服务器提供的全部工具。
+2. 调用 `activate` 后，插件通过 `stdio` 或 `streamable-http` 连接服务器，带超时和页数上限分页读取 `tools/list`，再注册服务器提供的全部工具。激活结果只返回工具数量，不重复输出完整名称列表。
 3. 工具名沿用 `dsh-mcp-client` 的规则：`mcp__<server>__<tool>`。名称只保留 `[A-Za-z0-9_-]`，最长 64 个字符；出现冲突时追加 12 位哈希。
 4. 默认在 `agent/turn-stopping` 时释放本轮占用。`agent/disposed` 负责处理会话直接结束的情况。
-5. 收到 `tools/list/changed` 后会重新同步工具。连接意外断开时，插件会立即卸载旧工具；再次调用 `activate` 即可恢复。
+5. 收到 `tools/list/changed` 后，插件先完整拉取并验证新目录，再按指纹差量更新：未变化的工具不重复注册，刷新失败则保留最后一次可用目录。并发通知会合并，刷新期间的新通知会在本次完成后再同步一次。
+6. 连接意外断开时会立即卸载失效工具。仍有活跃会话（或启用了 `autoActivate`）时，插件按 `reconnectAttempts` 做有限自动重连，不会无限后台循环。
 
 ## 限制
 
 - 不支持必须以任务方式执行的工具，即 `tool.execution.taskSupport === 'required'`。遇到这类工具会直接返回错误。
-- 连接断开后不会自动重连。按需模式下，重新调用 `activate` 更可控，也不会让闲置服务器在后台反复启动。
+- 自动重连是有界的，且只在仍有连接需求时发生。超过预算后需重新调用 `activate`；成功调用任一服务器工具会恢复重连预算。
 - TOKEN 数据是工具定义的近似值，不代表请求的全部输入，也不能直接换算成账单金额。
+
+## 测试
+
+```sh
+npm ci --legacy-peer-deps --ignore-scripts
+npm test
+```
+
+测试覆盖分页与游标保护、稳定指纹、差量更新、注册失败回滚、刷新通知合并，以及真实 stdio MCP 客户端/服务端的分页、调用和目录变更通知。
 
 ## 许可证
 

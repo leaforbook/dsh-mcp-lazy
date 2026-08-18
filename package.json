@@ -1,6 +1,6 @@
 {
   "name": "@xiaoyilin/dsh-mcp-lazy",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Lazy MCP bridge for DeepSeek Harness: servers connect on demand — only two lightweight activate/deactivate control tools are registered up front. · DSH 按需 MCP 桥接：平时只注册激活/停用控制工具，模型调用时才连接服务器并注册其全部工具。",
   "type": "module",
   "main": "lib/index.js",
@@ -23,7 +23,7 @@
     "lazy-loading"
   ],
   "scripts": {
-    "test": "node --test"
+    "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.1",
@@ -34,19 +34,12 @@
     "@deepseek-ai/dsh-subprocess": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-tools": "^0.1.0-rc.6"
   },
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
-    }
-  },
   "exports": {
     ".": "./lib/index.js",
-    "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
   "files": [
     "lib",
-    "cordis.patch.yml",
     "LICENSE"
   ],
   "engines": {
