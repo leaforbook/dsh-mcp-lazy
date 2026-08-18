@@ -9,6 +9,10 @@
     "type": "git",
     "url": "git+https://github.com/leaforbook/dsh-mcp-lazy.git"
   },
+  "homepage": "https://github.com/leaforbook/dsh-mcp-lazy#readme",
+  "bugs": {
+    "url": "https://github.com/leaforbook/dsh-mcp-lazy/issues"
+  },
   "keywords": [
     "deepseek",
     "harness",
