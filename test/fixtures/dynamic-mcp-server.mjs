@@ -10,6 +10,7 @@ import {
 const stateFile = process.argv[2]
 const failReconnectStarts = Number.parseInt(process.argv[3] ?? '0', 10) || 0
 const listDelayMs = Number.parseInt(process.argv[4] ?? '0', 10) || 0
+const includeRouterCollision = process.argv[5] === 'router-collision'
 let catalog = 'initial'
 let failNextList = false
 
@@ -41,7 +42,10 @@ function commands() {
     } },
     { name: 'change_catalog', description: 'change the fixture tool catalog', inputSchema },
     { name: 'fail_refresh', description: 'make the next tools/list request fail', inputSchema },
-    { name: 'disconnect_once', description: 'close the first fixture process only', inputSchema }
+    { name: 'disconnect_once', description: 'close the first fixture process only', inputSchema },
+    ...(includeRouterCollision
+      ? [{ name: 'search_and_activate', description: 'native shared-router collision tool', inputSchema }]
+      : [])
   ]
 }
 
@@ -83,6 +87,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
   if (name === 'initial_only' || name === 'changed_only') {
     return { content: [{ type: 'text', text: name }] }
+  }
+  if (name === 'search_and_activate' && includeRouterCollision) {
+    return { content: [{ type: 'text', text: 'native search_and_activate' }] }
   }
   throw new Error(`unknown fixture tool: ${name}`)
 })

@@ -11,25 +11,36 @@ const routerToolName = 'mcp__router__search_and_activate'
 const fixture = fileURLToPath(new URL('./dynamic-mcp-server.mjs', import.meta.url))
 const tempRoot = await mkdtemp(join(tmpdir(), 'dsh-mcp-lazy-host-'))
 
-function createContext() {
+function createContext({
+  failEffectAfterFactory = false,
+  failOnEvent,
+  failRegistrationName
+} = {}) {
   const definitions = new Map()
   const handlers = new Map()
   const cleanups = []
   const logs = []
   const registrations = []
   const disposals = []
+  const disposalAttempts = []
+  let failedEffectCleanup
   return {
     definitions,
+    disposalAttempts,
     disposals,
     logs,
     registrations,
     tools: {
       register(definition) {
+        if (definition.name === failRegistrationName) {
+          throw new Error(`registration failed: ${definition.name}`)
+        }
         if (definitions.has(definition.name)) throw new Error(`duplicate tool: ${definition.name}`)
         definitions.set(definition.name, definition)
         registrations.push(definition.name)
         let active = true
         return () => {
+          disposalAttempts.push(definition.name)
           if (!active) return
           active = false
           disposals.push(definition.name)
@@ -43,18 +54,44 @@ function createContext() {
       error(message) { logs.push(`error ${message}`) }
     },
     on(event, callback) {
+      if (event === failOnEvent) throw new Error(`event registration failed: ${event}`)
       const callbacks = handlers.get(event) ?? []
       callbacks.push(callback)
       handlers.set(event, callbacks)
+      let active = true
+      return () => {
+        disposalAttempts.push(`on:${event}`)
+        if (!active) return
+        active = false
+        disposals.push(`on:${event}`)
+        const current = handlers.get(event) ?? []
+        const next = current.filter((item) => item !== callback)
+        if (next.length === 0) handlers.delete(event)
+        else handlers.set(event, next)
+      }
     },
     emit(event, payload) {
       for (const callback of handlers.get(event) ?? []) callback(payload)
     },
     effect(callback) {
-      cleanups.push(callback())
+      const cleanup = callback()
+      if (failEffectAfterFactory) {
+        failedEffectCleanup = cleanup
+        throw new Error('effect registration failed after factory')
+      }
+      cleanups.push(cleanup)
+    },
+    handlerCount() {
+      return [...handlers.values()].reduce((count, callbacks) => count + callbacks.length, 0)
+    },
+    replayFailedEffectCleanup() {
+      failedEffectCleanup?.()
     },
     cleanup() {
       for (const cleanup of cleanups.reverse()) cleanup?.()
+    },
+    cleanupLatest() {
+      return cleanups.pop()?.()
     }
   }
 }
@@ -104,6 +141,53 @@ async function unconfiguredInstanceIsNoOp() {
   await assert.doesNotReject(() => apply(context, undefined))
   assert.equal(context.definitions.size, 0)
   context.cleanup()
+}
+
+async function setupFailuresRollBackAcquiredResources() {
+  const stateFile = join(tempRoot, 'setup-failure-starts')
+
+  const onFailure = createContext({ failOnEvent: 'agent/turn-stopping' })
+  await assert.rejects(
+    apply(onFailure, config(stateFile, { serverName: 'on-failure' })),
+    /event registration failed: agent\/turn-stopping/
+  )
+  assert.equal(onFailure.definitions.size, 0)
+  assert.equal(onFailure.handlerCount(), 0)
+  assert.deepEqual(onFailure.disposals, [routerToolName])
+
+  const registrationFailure = createContext({
+    failRegistrationName: 'mcp__registration-failure__deactivate'
+  })
+  await assert.rejects(
+    apply(registrationFailure, config(stateFile, { serverName: 'registration-failure' })),
+    /registration failed: mcp__registration-failure__deactivate/
+  )
+  assert.equal(registrationFailure.definitions.size, 0)
+  assert.equal(registrationFailure.handlerCount(), 0)
+  assert.deepEqual(registrationFailure.disposals, [
+    'mcp__registration-failure__activate',
+    'on:agent/disposed',
+    'on:agent/turn-stopping',
+    routerToolName
+  ])
+
+  const effectFailure = createContext({ failEffectAfterFactory: true })
+  await assert.rejects(
+    apply(effectFailure, config(stateFile, { serverName: 'effect-failure' })),
+    /effect registration failed after factory/
+  )
+  assert.equal(effectFailure.definitions.size, 0)
+  assert.equal(effectFailure.handlerCount(), 0)
+  assert.deepEqual(effectFailure.disposals, [
+    'mcp__effect-failure__deactivate',
+    'mcp__effect-failure__activate',
+    'on:agent/disposed',
+    'on:agent/turn-stopping',
+    routerToolName
+  ])
+  assert.equal(effectFailure.disposalAttempts.length, 5)
+  effectFailure.replayFailedEffectCleanup()
+  assert.equal(effectFailure.disposalAttempts.length, 5, 'failed effect cleanup stays exactly-once')
 }
 
 function configurationDefaults() {
@@ -233,6 +317,59 @@ async function sharedRouterCleanupOrder() {
   )
 }
 
+async function routerNameCollisionHandsOwnershipBack() {
+  const peerStateFile = join(tempRoot, 'router-collision-peer-starts')
+  const collisionStateFile = join(tempRoot, 'router-collision-starts')
+  await Promise.all([
+    writeFile(peerStateFile, '0'),
+    writeFile(collisionStateFile, '0')
+  ])
+  const context = createContext()
+  await apply(context, config(peerStateFile, {
+    serverName: 'collision-peer',
+    routingHints: ['collision peer']
+  }))
+  const sharedRouter = context.definitions.get(routerToolName)
+  assert.ok(sharedRouter)
+
+  await apply(context, config(collisionStateFile, {
+    serverName: 'router',
+    args: [fixture, collisionStateFile, '0', '0', 'router-collision']
+  }))
+
+  const firstActivation = await call(context, 'mcp__router__activate', {}, { id: 'collision-first' })
+  assert.doesNotMatch(firstActivation.content[0].text, /失败/)
+  const nativeRouter = context.definitions.get(routerToolName)
+  assert.ok(nativeRouter)
+  assert.notEqual(nativeRouter, sharedRouter)
+  assert.equal((await call(context, routerToolName)).content[0].text, 'native search_and_activate')
+
+  await call(context, 'mcp__router__deactivate')
+  assert.equal(context.definitions.get(routerToolName), sharedRouter)
+
+  const secondActivation = await call(context, 'mcp__router__activate', {}, { id: 'collision-second' })
+  assert.doesNotMatch(secondActivation.content[0].text, /失败/)
+  assert.notEqual(context.definitions.get(routerToolName), sharedRouter)
+
+  await context.cleanupLatest()
+  assert.equal(context.definitions.get(routerToolName), sharedRouter)
+  assert.ok(!context.definitions.has('mcp__router__activate'))
+  assert.ok(!context.definitions.has('mcp__router__deactivate'))
+  assert.ok(context.definitions.has('mcp__collision-peer__activate'))
+  assert.ok(context.definitions.has('mcp__collision-peer__deactivate'))
+
+  const routed = await call(context, routerToolName, {
+    query: 'collision peer',
+    serverName: 'collision-peer'
+  }, { id: 'collision-peer' })
+  assert.match(routed.content[0].text, /collision-peer/)
+  assert.equal(await starts(peerStateFile), 1)
+  await call(context, 'mcp__collision-peer__deactivate')
+
+  context.cleanup()
+  assert.equal(context.definitions.size, 0)
+}
+
 async function invalidWarmIdleFallsBackWithoutChangingZero() {
   const fallbackStateFile = join(tempRoot, 'warm-fallback-starts')
   await writeFile(fallbackStateFile, '0')
@@ -348,10 +485,12 @@ async function activationHonorsAbortSignal() {
 
 try {
   await unconfiguredInstanceIsNoOp()
+  await setupFailuresRollBackAcquiredResources()
   await fullLifecycle()
   configurationDefaults()
   await demandDisappearsDuringReconnect()
   await sharedRouterCleanupOrder()
+  await routerNameCollisionHandsOwnershipBack()
   await invalidWarmIdleFallsBackWithoutChangingZero()
   await warmReuseAndExpiry()
   await explicitDeactivateCancelsReconnect()

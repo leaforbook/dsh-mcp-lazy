@@ -36,7 +36,7 @@
 
 ## 什么时候省，什么时候不省
 
-- 服务器未激活时，目录里只有两个控制工具，省得最多。
+- 服务器未激活时，每个服务器只保留两个专用控制工具，整个工具域另共享一个搜索激活路由器，仍是最省 TOKEN 的状态。
 - 激活服务器后，它的全部工具会在当前轮注册；这一轮仍要承担该服务器的工具定义 TOKEN。
 - 默认会在轮次结束时立即卸载远端工具 Schema；专用控制工具和共享路由器仍然可用。
 - 默认连接继续保温 5 分钟。保温期内再次激活会直接复用内存目录和现有连接，不重新启动 MCP 进程。
@@ -105,6 +105,7 @@ dsh plugin --profile web add -w github:leaforbook/dsh-mcp-lazy
 ## 工作原理
 
 1. 同一 DSH 工具域只注册一个 `mcp__router__search_and_activate`，每个服务器仍保留 `mcp__<server>__activate` 和 `mcp__<server>__deactivate`。路由器依次参考精确 `serverName`、完整工具前缀、`routingHints` 和已缓存目录；零匹配或最高分并列时拒绝猜测，不会激活任何服务器。
+   如果已有配置使用 `serverName: router`，且该 MCP 原生提供 `search_and_activate`，两个工具会得到同一个公开名称。宿主注册表无法同时暴露同名工具，因此激活期间由原生工具占用该名称；原生工具卸载后自动恢复共享路由器，其他服务器自己的 `activate` / `deactivate` 始终可用。
 2. 路由器选中服务器或明确调用 `activate` 后，插件通过 `stdio` 或 `streamable-http` 连接服务器，带超时和页数上限分页读取 `tools/list`，再注册服务器提供的全部工具。激活结果只返回工具数量，不重复输出完整名称列表。
 3. 工具名沿用 `dsh-mcp-client` 的规则：`mcp__<server>__<tool>`。名称只保留 `[A-Za-z0-9_-]`，最长 64 个字符；出现冲突时追加 12 位哈希。
 4. 默认在 `agent/turn-stopping` 时立即卸载远端工具 Schema，并把连接保温 `warmIdleMs`；保温期再次激活会直接从内存目录恢复 Schema。`agent/disposed` 负责处理会话直接结束的情况，显式 `deactivate` 和插件销毁始终立即关闭连接。
