@@ -40,6 +40,7 @@
 - 激活服务器后，它的全部工具会在当前轮注册；这一轮仍要承担该服务器的工具定义 TOKEN。
 - 默认会在轮次结束时立即卸载远端工具 Schema；专用控制工具和共享路由器仍然可用。
 - 默认连接继续保温 5 分钟。保温期内再次激活会直接复用内存目录和现有连接，不重新启动 MCP 进程。
+- `releaseOnTurnEnd: false` 会让实际激活或调用过该服务器的会话成为跨轮次持有者；直到最后一个持有会话销毁前，Schema 和连接都会保持可用。
 - 如果服务器本来只有一两个很短的工具，按需模式的 TOKEN 优势可能很小。
 - `autoActivate: true` 会在启动时直接连接服务器，相当于关闭懒加载，不再节省这部分 TOKEN。
 
@@ -96,21 +97,22 @@ dsh plugin --profile web add -w github:leaforbook/dsh-mcp-lazy
 | `connectTimeoutMs` | number | `30000` | 建立 MCP 连接的超时，单位为毫秒。 |
 | `discoveryTimeoutMs` | number | `60000` | 单页 `tools/list` 请求的超时，单位为毫秒；激活流程另有略短于 180 秒控制工具超时的总 deadline。 |
 | `maxToolListPages` | number | `100` | 一次目录发现最多读取的页数；重复游标、重名工具或超限都会中止。 |
-| `reconnectAttempts` | number | `1` | 意外断开且仍有活跃会话时的自动重连次数。设为 `0` 可关闭；成功调用工具后恢复预算。 |
+| `reconnectAttempts` | number | `1` | 意外断开且仍有当前轮使用者、跨轮次持有者或自动激活所有权时的重连次数。设为 `0` 可关闭；成功调用工具后恢复预算。 |
 | `autoActivate` | boolean | `false` | 启动时直接连接服务器。开启后不再按需加载。 |
-| `releaseOnTurnEnd` | boolean | `true` | 本轮结束且没有会话继续使用时，立即卸载远端工具 Schema。设为 `false` 时保持 0.3.x 的常驻发布行为。 |
+| `releaseOnTurnEnd` | boolean | `true` | 本轮结束且没有会话继续使用时，立即卸载远端工具 Schema。设为 `false` 时，实际激活或调用过服务器的会话会跨轮次持有发布；无关会话的销毁不会释放它，最后一个真实持有会话销毁后才卸载。 |
 | `warmIdleMs` | number | `300000` | Schema 卸载后的连接保温时长，单位为毫秒。仅接受非负整数，无效值回退为 5 分钟；设为 `0` 可恢复 0.3.x 的轮末立即关闭连接行为。 |
 | `routingHints` | string[] | `[]` | 共享路由器用于匹配服务器的关键词，例如业务名称、能力或自然语言别名。 |
 
 ## 工作原理
 
-1. 同一 DSH 工具域只注册一个 `mcp__router__search_and_activate`，每个服务器仍保留 `mcp__<server>__activate` 和 `mcp__<server>__deactivate`。路由器依次参考精确 `serverName`、完整工具前缀、`routingHints` 和已缓存目录；零匹配或最高分并列时拒绝猜测，不会激活任何服务器。
+1. 同一 DSH 工具域只注册一个 `mcp__router__search_and_activate`，每个服务器仍保留 `mcp__<server>__activate` 和 `mcp__<server>__deactivate`。路由器依次参考精确 `serverName`、完整工具前缀、`routingHints` 和已缓存目录；完整前缀先保留大小写做精确匹配，只有大小写折叠后的候选唯一时才回退匹配，因此 `Foo` / `foo` 之类的歧义不会被猜中。零匹配或最高分并列时同样不会激活任何服务器。
+   共享路由器的宿主注册归属于当前某个插件上下文；该 Cordis fiber 卸载而其他服务器仍存活时，注册会转移到一个存活上下文，仍保持每个工具域恰好一份。
    如果已有配置使用 `serverName: router`，且该 MCP 原生提供 `search_and_activate`，两个工具会得到同一个公开名称。宿主注册表无法同时暴露同名工具，因此激活期间由原生工具占用该名称；原生工具卸载后自动恢复共享路由器，其他服务器自己的 `activate` / `deactivate` 始终可用。
 2. 路由器选中服务器或明确调用 `activate` 后，插件通过 `stdio` 或 `streamable-http` 连接服务器，带超时和页数上限分页读取 `tools/list`，再注册服务器提供的全部工具。激活结果只返回工具数量，不重复输出完整名称列表。
 3. 工具名沿用 `dsh-mcp-client` 的规则：`mcp__<server>__<tool>`。名称只保留 `[A-Za-z0-9_-]`，最长 64 个字符；出现冲突时追加 12 位哈希。
-4. 默认在 `agent/turn-stopping` 时立即卸载远端工具 Schema，并把连接保温 `warmIdleMs`；保温期再次激活会直接从内存目录恢复 Schema。`agent/disposed` 负责处理会话直接结束的情况，显式 `deactivate` 和插件销毁始终立即关闭连接。
-5. 收到 `tools/list/changed` 后，插件先完整拉取并验证新目录，再按指纹差量更新：未变化的工具不重复注册，刷新失败则保留最后一次可用目录。保温且没有活跃使用者时只更新内存目录，不重新发布 Schema；并发通知会合并，刷新期间的新通知会在本次完成后再同步一次。
-6. 连接意外断开时会立即卸载失效工具。仍有活跃会话（或启用了 `autoActivate`）时，插件按 `reconnectAttempts` 做有限自动重连，不会无限后台循环。
+4. `releaseOnTurnEnd: true` 时，默认在 `agent/turn-stopping` 立即卸载远端工具 Schema，并把连接保温 `warmIdleMs`；保温期再次激活会直接从内存目录恢复 Schema。设为 `false` 时，当前轮使用者与跨轮次持有者分别记录：轮次停止只清除当前轮需求，持有权一直保留到对应的 `agent/disposed`；多个持有者必须全部销毁才会释放，无关会话的销毁不产生影响。`autoActivate` 是独立的常驻所有权；显式 `deactivate` 和插件销毁始终立即关闭连接。
+5. 收到 `tools/list/changed` 后，插件先完整拉取并验证新目录，再按指纹差量更新：未变化的工具不重复注册，刷新失败则保留最后一次可用目录。每次发现都有单调递增的代次，较早的激活发现即使更晚返回也不能覆盖更新的刷新结果。保温且没有活跃使用者时只更新内存目录，不重新发布 Schema；并发通知会合并，刷新期间的新通知会在本次完成后再同步一次。
+6. 连接意外断开时会立即卸载失效工具。仍有当前轮使用者、跨轮次持有者（或启用了 `autoActivate`）时，插件按 `reconnectAttempts` 做有限自动重连，不会无限后台循环。
 
 ## 限制
 

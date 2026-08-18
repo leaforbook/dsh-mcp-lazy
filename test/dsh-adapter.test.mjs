@@ -76,6 +76,69 @@ test('Cordis service proxies share one router registration', () => {
   assert.equal(definitions.size, 0)
 })
 
+test('router publication moves to a surviving Cordis fiber after its first owner unloads', async () => {
+  const definitions = new Map()
+  const originalTools = { register() {} }
+  const fibers = new Map()
+
+  function contextFor(fiberName) {
+    const resources = []
+    fibers.set(fiberName, resources)
+    const tools = new Proxy(originalTools, {
+      get(target, property, receiver) {
+        if (property === Symbol.for('cordis.original')) return target
+        if (property !== 'register') return Reflect.get(target, property, receiver)
+        return (definition) => {
+          if (definitions.has(definition.name)) throw new Error(`duplicate tool: ${definition.name}`)
+          definitions.set(definition.name, { definition, fiberName })
+          let active = true
+          const dispose = () => {
+            if (!active) return
+            active = false
+            if (definitions.get(definition.name)?.definition === definition) definitions.delete(definition.name)
+          }
+          resources.push(dispose)
+          return dispose
+        }
+      }
+    })
+    return { ...supportedContext(), tools }
+  }
+
+  function unloadFiber(fiberName) {
+    for (const dispose of [...fibers.get(fiberName)].reverse()) dispose()
+  }
+
+  const unregisterFirst = registerRouterServer(createDshAdapter(contextFor('first')), {
+    serverName: 'first',
+    routingHints: [],
+    getCatalog: () => [],
+    activate: async () => 'first active'
+  })
+  const unregisterSecond = registerRouterServer(createDshAdapter(contextFor('second')), {
+    serverName: 'second',
+    routingHints: [],
+    getCatalog: () => [],
+    activate: async () => 'second active'
+  })
+
+  assert.equal(definitions.get('mcp__router__search_and_activate').fiberName, 'first')
+  unloadFiber('first')
+  assert.equal(definitions.size, 0, 'Cordis removes registrations owned by the unloading fiber')
+
+  unregisterFirst()
+  const surviving = definitions.get('mcp__router__search_and_activate')
+  assert.equal(surviving.fiberName, 'second')
+  const routed = await surviving.definition.execute(
+    { query: 'anything', serverName: 'second' },
+    { agent: { id: 'survivor' }, signal: new AbortController().signal }
+  )
+  assert.match(routed.content[0].text, /second/)
+
+  unregisterSecond()
+  assert.equal(definitions.size, 0)
+})
+
 test('Cordis service proxies share an opaque identity without exposing the original service', () => {
   const originalTools = {
     secret: 'must-not-escape',

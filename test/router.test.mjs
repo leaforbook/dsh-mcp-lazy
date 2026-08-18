@@ -74,9 +74,62 @@ function routerEntry(serverName) {
   }
 }
 
+function fiberRegistryAdapter(identity, fiberName, state, {
+  throwNativeDisposeOnce = false,
+  throwSharedDisposeOnce = false
+} = {}) {
+  return {
+    identity,
+    registerTool(definition) {
+      if (state.definitions.has(definition.name)) throw new Error(`duplicate tool: ${definition.name}`)
+      state.definitions.set(definition.name, { definition, fiberName })
+      let active = true
+      return () => {
+        if (!active) return
+        active = false
+        state.disposals.push([fiberName, definition.description])
+        if (state.definitions.get(definition.name)?.definition === definition) {
+          state.definitions.delete(definition.name)
+        }
+        if (definition.description === '搜索并激活最匹配的 MCP 服务器。' && throwSharedDisposeOnce) {
+          throwSharedDisposeOnce = false
+          throw new Error(`${fiberName} shared disposer failed`)
+        }
+        if (definition.description === 'native collision tool' && throwNativeDisposeOnce) {
+          throwNativeDisposeOnce = false
+          throw new Error(`${fiberName} native disposer failed`)
+        }
+      }
+    }
+  }
+}
+
 test('explicit serverName and public tool prefix select exact servers', () => {
   assert.equal(selectRoute(entries, { query: 'anything', serverName: 'context7' }).entry.serverName, 'context7')
   assert.equal(selectRoute(entries, { query: '调用 mcp__chrome-devtools__take_screenshot' }).entry.serverName, 'chrome-devtools')
+})
+
+test('public tool prefixes preserve exact case and never guess an ambiguous case fold', () => {
+  const upper = routerEntry('Foo')
+  const lower = routerEntry('foo')
+
+  assert.equal(
+    selectRoute([upper, lower], { query: '调用 mcp__Foo__take_screenshot' }).entry.serverName,
+    'Foo'
+  )
+  assert.equal(
+    selectRoute([upper, lower], { query: '调用 mcp__foo__take_screenshot' }).entry.serverName,
+    'foo'
+  )
+
+  const ambiguous = selectRoute([upper, lower], { query: '调用 mcp__FOO__take_screenshot' })
+  assert.equal(ambiguous.entry, undefined)
+  assert.deepEqual(ambiguous.candidates.map((entry) => entry.serverName).sort(), ['Foo', 'foo'])
+
+  assert.equal(
+    selectRoute([upper], { query: '调用 mcp__foo__take_screenshot' }).entry.serverName,
+    'Foo'
+  )
 })
 
 test('a unique hint or catalog match selects one server', () => {
@@ -91,7 +144,7 @@ test('zero score and tied top score do not select a server', () => {
   assert.deepEqual(tied.candidates.map((entry) => entry.serverName), ['chrome-devtools', 'playwright'])
 })
 
-test('one router tool is shared and disposed after the last server leaves', async () => {
+test('one router tool is shared and moves owners until the last server leaves', async () => {
   const definitions = new Map()
   let routerRegistrations = 0
   let routerDisposals = 0
@@ -115,9 +168,10 @@ test('one router tool is shared and disposed after the last server leaves', asyn
   assert.deepEqual(activated, ['context7'])
   assert.match(result.content[0].text, /context7/)
   first()
-  assert.equal(routerDisposals, 0)
-  second()
+  assert.equal(routerRegistrations, 2)
   assert.equal(routerDisposals, 1)
+  second()
+  assert.equal(routerDisposals, 2)
 })
 
 test('a throwing shared disposer rolls back native handoff without stale ownership', () => {
@@ -183,4 +237,50 @@ test('a throwing final shared disposer removes the registry for a new adapter id
   assert.equal(firstHost.definitions.size, 0)
   unregisterSecond()
   assert.equal(secondHost.definitions.size, 0)
+})
+
+test('removing the shared-router owner transfers publication despite its throwing disposer', () => {
+  const identity = {}
+  const state = { definitions: new Map(), disposals: [] }
+  const first = fiberRegistryAdapter(identity, 'first', state, { throwSharedDisposeOnce: true })
+  const second = fiberRegistryAdapter(identity, 'second', state)
+  const unregisterFirst = registerRouterServer(first, routerEntry('first'))
+  const unregisterSecond = registerRouterServer(second, routerEntry('second'))
+
+  assert.equal(state.definitions.get(ROUTER_TOOL_NAME).fiberName, 'first')
+  assert.throws(() => unregisterFirst(), /first shared disposer failed/)
+  assert.equal(state.definitions.get(ROUTER_TOOL_NAME).fiberName, 'second')
+  assert.doesNotThrow(() => unregisterFirst())
+  assert.equal(
+    state.disposals.filter(([fiber, description]) => fiber === 'first' && description === '搜索并激活最匹配的 MCP 服务器。').length,
+    1
+  )
+
+  unregisterSecond()
+  assert.equal(state.definitions.size, 0)
+})
+
+test('removing a native collision owner restores the shared router through a surviving adapter', () => {
+  const identity = {}
+  const state = { definitions: new Map(), disposals: [] }
+  const first = fiberRegistryAdapter(identity, 'first', state, { throwNativeDisposeOnce: true })
+  const second = fiberRegistryAdapter(identity, 'second', state)
+  const unregisterFirst = registerRouterServer(first, routerEntry('first-native'))
+  const unregisterSecond = registerRouterServer(second, routerEntry('second-survivor'))
+  const disposeNative = registerRouterCompatibleTool(first, nativeRouterDefinition())
+
+  assert.equal(state.definitions.get(ROUTER_TOOL_NAME).fiberName, 'first')
+  assert.equal(state.definitions.get(ROUTER_TOOL_NAME).definition.description, 'native collision tool')
+  assert.throws(() => unregisterFirst(), /first native disposer failed/)
+  assert.equal(state.definitions.get(ROUTER_TOOL_NAME).fiberName, 'second')
+  assert.equal(state.definitions.get(ROUTER_TOOL_NAME).definition.description, '搜索并激活最匹配的 MCP 服务器。')
+
+  assert.doesNotThrow(() => disposeNative())
+  assert.equal(
+    state.disposals.filter(([fiber, description]) => fiber === 'first' && description === 'native collision tool').length,
+    1
+  )
+
+  unregisterSecond()
+  assert.equal(state.definitions.size, 0)
 })

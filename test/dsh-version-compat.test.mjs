@@ -18,7 +18,13 @@ test('plugin imports host-owned peers for the requested DSH version', async (t) 
     tools: { register(definition) { definitions.set(definition.name, definition); return () => definitions.delete(definition.name) } },
     logger: { info() {}, warn() {}, error() {} },
     on() {},
-    effect(factory) { cleanups.push(factory()) }
+    effect(factory) {
+      const cleanup = factory()
+      cleanups.push(async () => {
+        await new Promise((resolve) => setImmediate(resolve))
+        return cleanup?.()
+      })
+    }
   }
   await assert.doesNotReject(() => apply(context, {
     transport: 'stdio',
@@ -38,6 +44,8 @@ test('plugin imports host-owned peers for the requested DSH version', async (t) 
     routingHints: []
   }))
   assert.ok(definitions.has('mcp__compat__activate'))
+  assert.ok(definitions.has('mcp__compat__deactivate'))
   assert.ok(definitions.has('mcp__router__search_and_activate'))
-  for (const cleanup of cleanups.reverse()) cleanup?.()
+  for (const cleanup of cleanups.reverse()) await cleanup?.()
+  assert.equal(definitions.size, 0)
 })

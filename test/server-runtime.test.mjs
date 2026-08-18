@@ -17,6 +17,14 @@ function catalog(name, fingerprint = name) {
   }]])
 }
 
+function executableCatalog(name, result) {
+  return new Map([[name, {
+    fingerprint: name,
+    summary: { name, description: `${name} description` },
+    definition: { name, execute: () => result }
+  }]])
+}
+
 function clientBoundCatalog(client) {
   return new Map([['stable-tool', {
     fingerprint: 'stable-fingerprint',
@@ -162,6 +170,53 @@ test('failed refresh registration preserves the last published catalog', async (
   }
 })
 
+test('a newer list-change discovery wins when initial activation discovery resolves last', async () => {
+  const adapter = createAdapter()
+  const client = createClient('out-of-order')
+  const initialDiscovery = deferred()
+  const refreshDiscovery = deferred()
+  let handlers
+  let discoveryAttempts = 0
+  const runtime = createServerRuntime(runtimeOptions({
+    adapter,
+    async createConnectedClient(_signal, callbacks) {
+      handlers = callbacks
+      return client
+    },
+    async discoverDefinitions() {
+      discoveryAttempts += 1
+      return discoveryAttempts === 1 ? initialDiscovery.promise : refreshDiscovery.promise
+    }
+  }))
+
+  let activation
+  try {
+    activation = runtime.activate({ id: 'out-of-order-agent' })
+    await waitFor(() => discoveryAttempts === 1, 'initial discovery starts')
+    const refresh = handlers.onToolsChanged(client)
+    await waitFor(() => discoveryAttempts === 2, 'newer list-change discovery starts')
+
+    refreshDiscovery.resolve(executableCatalog('new-tool', 'new executor'))
+    await refresh
+    assert.deepEqual([...adapter.definitions.keys()], ['new-tool'])
+
+    initialDiscovery.resolve(executableCatalog('stale-tool', 'stale executor'))
+    const result = await activation
+
+    assert.match(result, /已激活/)
+    assert.deepEqual(runtime.getCatalog(), [
+      { name: 'new-tool', description: 'new-tool description' }
+    ])
+    assert.deepEqual([...adapter.definitions.keys()], ['new-tool'])
+    assert.equal(adapter.definitions.get('new-tool').execute(), 'new executor')
+  } finally {
+    initialDiscovery.resolve(executableCatalog('stale-tool', 'stale executor'))
+    refreshDiscovery.resolve(executableCatalog('new-tool', 'new executor'))
+    await Promise.allSettled([activation].filter(Boolean))
+    await runtime.dispose()
+  }
+})
+
 test('concurrent activation during cold discovery never republishes retained executors', async () => {
   const adapter = createAdapter()
   const nextDiscovery = deferred()
@@ -222,7 +277,7 @@ test('concurrent activation during cold discovery never republishes retained exe
   }
 })
 
-test('turn stopping clears reconnect demand without releasing persistent schemas', async () => {
+test('a persistent owner survives turn stop and unrelated disposal, then reconnects', async () => {
   const adapter = createAdapter()
   const clients = []
   const callbacks = []
@@ -240,16 +295,26 @@ test('turn stopping clears reconnect demand without releasing persistent schemas
   }))
 
   try {
-    const agent = { id: 'persistent-agent' }
-    await runtime.activate(agent)
-    runtime.onTurnStopping({ agent })
+    const owner = { id: 'persistent-owner' }
+    await runtime.activate(owner)
+    runtime.onTurnStopping({ agent: owner })
     assert.ok(adapter.definitions.has('persistent-tool'), 'turn stop must not release persistent schemas')
+    runtime.onAgentDisposed({ agent: { id: 'unrelated-agent' } })
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.ok(adapter.definitions.has('persistent-tool'), 'unrelated disposal must not release an owner session')
+    assert.equal(clients[0].closeCalls, 0)
 
     callbacks[0].onClose(clients[0])
-    await new Promise((resolve) => setTimeout(resolve, 250))
+    await waitFor(
+      () => connectionAttempts === 2 && adapter.definitions.has('persistent-tool'),
+      'persistent ownership reconnects and republishes the catalog'
+    )
 
-    assert.equal(connectionAttempts, 1)
-    assert.equal(adapter.definitions.size, 0)
+    runtime.onAgentDisposed({ agent: owner })
+    await waitFor(
+      () => adapter.definitions.size === 0 && clients[1].closeCalls === 1,
+      'disposing the actual last owner releases the persistent connection'
+    )
   } finally {
     await runtime.dispose()
   }
@@ -389,6 +454,76 @@ test('irrelevant agent disposal preserves a persistent connection used by anothe
 
     assert.ok(adapter.definitions.has('shared-tool'))
     assert.equal(client.closeCalls, 0)
+  } finally {
+    await runtime.dispose()
+  }
+})
+
+test('persistent publication releases only after every owning agent is disposed', async () => {
+  const adapter = createAdapter()
+  const client = createClient('persistent-multiple-owners')
+  const runtime = createServerRuntime(runtimeOptions({
+    adapter,
+    async createConnectedClient() { return client },
+    async discoverDefinitions() { return catalog('shared-tool') }
+  }))
+  const firstOwner = { id: 'first-owner' }
+  const secondOwner = { id: 'second-owner' }
+
+  try {
+    await runtime.activate(firstOwner)
+    await runtime.activate(secondOwner)
+    runtime.onTurnStopping({ agent: firstOwner })
+    runtime.onTurnStopping({ agent: secondOwner })
+
+    runtime.onAgentDisposed({ agent: firstOwner })
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.ok(adapter.definitions.has('shared-tool'))
+    assert.equal(client.closeCalls, 0)
+
+    runtime.onAgentDisposed({ agent: { id: 'unrelated-owner' } })
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.ok(adapter.definitions.has('shared-tool'))
+    assert.equal(client.closeCalls, 0)
+
+    runtime.onAgentDisposed({ agent: secondOwner })
+    await waitFor(
+      () => adapter.definitions.size === 0 && client.closeCalls === 1,
+      'last persistent owner disposal releases the server'
+    )
+  } finally {
+    await runtime.dispose()
+  }
+})
+
+test('release-on-turn-end still releases without waiting for agent disposal', async () => {
+  const adapter = createAdapter()
+  const client = createClient('turn-scoped')
+  const runtime = createServerRuntime(runtimeOptions({
+    adapter,
+    config: {
+      serverName: 'runtime-fixture',
+      autoActivate: false,
+      releaseOnTurnEnd: true,
+      warmIdleMs: 0
+    },
+    async createConnectedClient() { return client },
+    async discoverDefinitions() { return catalog('turn-tool') }
+  }))
+  const agent = { id: 'turn-owner' }
+
+  try {
+    await runtime.activate(agent)
+    runtime.onTurnStopping({ agent })
+    await waitFor(
+      () => adapter.definitions.size === 0 && client.closeCalls === 1,
+      'turn-scoped ownership releases at turn stop'
+    )
+
+    runtime.onAgentDisposed({ agent })
+    runtime.onAgentDisposed({ agent: { id: 'unrelated-agent' } })
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(client.closeCalls, 1)
   } finally {
     await runtime.dispose()
   }
