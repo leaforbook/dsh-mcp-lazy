@@ -282,6 +282,44 @@ test('agent disposal releases a persistent connection after turn stopping remove
   }
 })
 
+test('delayed duplicate agent disposal does not extend an active warm-idle deadline', async () => {
+  const adapter = createAdapter()
+  const client = createClient('warm-disposed')
+  const runtime = createServerRuntime(runtimeOptions({
+    adapter,
+    config: {
+      serverName: 'runtime-fixture',
+      autoActivate: false,
+      releaseOnTurnEnd: true,
+      warmIdleMs: 50
+    },
+    async createConnectedClient() { return client },
+    async discoverDefinitions() { return catalog('warm-tool') }
+  }))
+
+  try {
+    const agent = { id: 'warm-agent' }
+    await runtime.activate(agent)
+    runtime.onTurnStopping({ agent })
+
+    await new Promise((resolve) => setTimeout(resolve, 35))
+    runtime.onAgentDisposed({ agent })
+    setTimeout(() => runtime.onAgentDisposed({ agent }), 10)
+    setTimeout(() => runtime.onAgentDisposed({ agent }), 20)
+
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    assert.equal(client.closeCalls, 1, 'warm client closes from the turn-stop deadline')
+    assert.equal(adapter.definitions.size, 0)
+
+    runtime.onAgentDisposed({ agent })
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(client.closeCalls, 1, 'repeated disposal stays idempotent after close')
+  } finally {
+    await runtime.dispose()
+  }
+})
+
 test('irrelevant agent disposal preserves a persistent connection used by another agent', async () => {
   const adapter = createAdapter()
   const client = createClient('persistent-shared')
