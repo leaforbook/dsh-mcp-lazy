@@ -66,6 +66,8 @@ function config(stateFile, overrides = {}) {
     reconnectAttempts: 1,
     autoActivate: false,
     releaseOnTurnEnd: false,
+    warmIdleMs: 300000,
+    routingHints: [],
     ...overrides
   }
 }
@@ -164,6 +166,56 @@ async function demandDisappearsDuringReconnect() {
   context.cleanup()
 }
 
+async function warmReuseAndExpiry() {
+  const stateFile = join(tempRoot, 'warm-starts')
+  await writeFile(stateFile, '0')
+  const context = createContext()
+  const agent = { id: 'warm' }
+  await apply(context, config(stateFile, {
+    warmIdleMs: 120,
+    releaseOnTurnEnd: true
+  }))
+
+  await call(context, 'mcp__lazy-fixture__activate', {}, agent)
+  assert.equal(await starts(stateFile), 1)
+  context.emit('agent/turn-stopping', { agent })
+  await waitFor(() => !context.definitions.has('mcp__lazy-fixture__echo'), 'warm turn unloads schemas')
+
+  await call(context, 'mcp__lazy-fixture__activate', {}, agent)
+  assert.equal(await starts(stateFile), 1)
+  assert.equal((await call(context, 'mcp__lazy-fixture__echo', { text: 'warm-reuse' }, agent)).content[0].text, 'warm-reuse')
+
+  context.emit('agent/turn-stopping', { agent })
+  await new Promise((resolve) => setTimeout(resolve, 180))
+  await call(context, 'mcp__lazy-fixture__activate', {}, agent)
+  assert.equal(await starts(stateFile), 2)
+  context.cleanup()
+}
+
+async function explicitDeactivateCancelsReconnect() {
+  const stateFile = join(tempRoot, 'deactivate-reconnect-starts')
+  await writeFile(stateFile, '0')
+  const context = createContext()
+  const agent = { id: 'deactivate-reconnect' }
+  await apply(context, config(stateFile, {
+    args: [fixture, stateFile, '0', '500'],
+    autoActivate: true,
+    reconnectAttempts: 3
+  }))
+
+  await waitFor(() => context.definitions.has('mcp__lazy-fixture__echo'), 'auto-activated fixture')
+  await call(context, 'mcp__lazy-fixture__disconnect_once', {}, agent)
+  await waitFor(async () => await starts(stateFile) === 2, 'reconnect process starts before explicit deactivate')
+  await call(context, 'mcp__lazy-fixture__deactivate', {}, agent)
+  await new Promise((resolve) => setTimeout(resolve, 700))
+  assert.equal(await starts(stateFile), 2)
+  assert.deepEqual([...context.definitions.keys()].sort(), [
+    'mcp__lazy-fixture__activate',
+    'mcp__lazy-fixture__deactivate'
+  ])
+  context.cleanup()
+}
+
 async function activationHonorsAbortSignal() {
   const stateFile = join(tempRoot, 'abort-starts')
   await writeFile(stateFile, '0')
@@ -189,6 +241,8 @@ try {
   await unconfiguredInstanceIsNoOp()
   await fullLifecycle()
   await demandDisappearsDuringReconnect()
+  await warmReuseAndExpiry()
+  await explicitDeactivateCancelsReconnect()
   await activationHonorsAbortSignal()
   console.log('plugin lifecycle ok')
 } finally {
