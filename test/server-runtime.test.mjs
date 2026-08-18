@@ -254,3 +254,81 @@ test('turn stopping clears reconnect demand without releasing persistent schemas
     await runtime.dispose()
   }
 })
+
+test('agent disposal releases a persistent connection after turn stopping removed demand', async () => {
+  const adapter = createAdapter()
+  const client = createClient('persistent-disposed')
+  const runtime = createServerRuntime(runtimeOptions({
+    adapter,
+    async createConnectedClient() { return client },
+    async discoverDefinitions() { return catalog('persistent-tool') }
+  }))
+
+  try {
+    const agent = { id: 'persistent-agent' }
+    await runtime.activate(agent)
+    runtime.onTurnStopping({ agent })
+
+    assert.ok(adapter.definitions.has('persistent-tool'), 'turn stop preserves persistent schemas')
+    assert.equal(client.closeCalls, 0, 'turn stop preserves the persistent client')
+
+    runtime.onAgentDisposed({ agent })
+    await waitFor(
+      () => adapter.definitions.size === 0 && client.closeCalls === 1,
+      'agent disposal releases the persistent client and schemas'
+    )
+  } finally {
+    await runtime.dispose()
+  }
+})
+
+test('irrelevant agent disposal preserves a persistent connection used by another agent', async () => {
+  const adapter = createAdapter()
+  const client = createClient('persistent-shared')
+  const runtime = createServerRuntime(runtimeOptions({
+    adapter,
+    async createConnectedClient() { return client },
+    async discoverDefinitions() { return catalog('shared-tool') }
+  }))
+  const disposedAgent = { id: 'disposed-agent' }
+  const activeAgent = { id: 'active-agent' }
+
+  try {
+    await runtime.activate(disposedAgent)
+    await runtime.activate(activeAgent)
+    runtime.onAgentDisposed({ agent: disposedAgent })
+    runtime.onAgentDisposed({ agent: disposedAgent })
+    runtime.onAgentDisposed({ agent: { id: 'irrelevant-agent' } })
+
+    assert.ok(adapter.definitions.has('shared-tool'))
+    assert.equal(client.closeCalls, 0)
+  } finally {
+    await runtime.dispose()
+  }
+})
+
+test('agent disposal preserves an auto-activated connection without users', async () => {
+  const adapter = createAdapter()
+  const client = createClient('persistent-auto')
+  const runtime = createServerRuntime(runtimeOptions({
+    adapter,
+    config: {
+      serverName: 'runtime-fixture',
+      autoActivate: true,
+      releaseOnTurnEnd: false,
+      warmIdleMs: 0
+    },
+    async createConnectedClient() { return client },
+    async discoverDefinitions() { return catalog('auto-tool') }
+  }))
+
+  try {
+    await runtime.activate()
+    runtime.onAgentDisposed({ agent: { id: 'irrelevant-agent' } })
+
+    assert.ok(adapter.definitions.has('auto-tool'))
+    assert.equal(client.closeCalls, 0)
+  } finally {
+    await runtime.dispose()
+  }
+})
