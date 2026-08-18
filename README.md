@@ -1,35 +1,43 @@
 # @xiaoyilin/dsh-mcp-lazy
 
-Lazy MCP bridge for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): MCP servers connect **on demand** instead of at startup. Until a server is activated, only two lightweight control tools occupy the tool catalog — nothing else.
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的按需 MCP 桥接插件。它不会在启动时把 MCP 服务器的全部工具塞进工具目录，而是先为每个服务器注册 `activate` 和 `deactivate` 两个控制工具。需要用哪个服务器，再临时连接并加载它的工具；本轮结束后自动卸载。
 
-DSH 按需 MCP 桥接插件：MCP 服务器**按需激活**，不随启动常驻。平时工具目录里只有两个轻量控制工具，激活后才注册该服务器的全部工具。
+这样做主要是为了少占 TOKEN。工具的名称、说明和参数结构会随模型请求一起进入上下文。MCP 服务器越多、工具定义越长，常驻目录消耗的输入 TOKEN 就越多。这个插件让没用到的工具不进入当轮请求。
 
-## Why / 为什么
+## 实测能省多少 TOKEN
 
-`@deepseek-ai/dsh-mcp-client` connects every configured MCP server at startup and keeps all their tools registered permanently. With several servers that means dozens of tools in the catalog on every turn — crowding the model's function list, burning context tokens, and holding idle child processes open.
+下面的数据来自三个真实 MCP 服务器，测试时间为 2026-08-18。“全量常驻”按 `@deepseek-ai/dsh-mcp-client` 的方式统计，“按需模式”使用本插件未激活时的两个控制工具。TOKEN 使用 `cl100k_base` 统一计算，适合比较前后差额。
 
-`dsh-mcp-lazy` flips that around:
+| MCP 服务器 | 全量常驻 | 按需模式未激活 | 全量工具定义 | 按需工具定义 | 每轮减少 | 降幅 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Chrome DevTools MCP 1.7.0 | 29 个工具 | 2 个工具 | 4,585 TOKEN | 200 TOKEN | 4,385 TOKEN | 95.6% |
+| Playwright MCP 0.0.79 | 24 个工具 | 2 个工具 | 3,452 TOKEN | 195 TOKEN | 3,257 TOKEN | 94.4% |
+| Filesystem MCP 2026.7.10 | 14 个工具 | 2 个工具 | 1,694 TOKEN | 190 TOKEN | 1,504 TOKEN | 88.8% |
+| 三个服务器合计 | 67 个工具 | 6 个工具 | 9,727 TOKEN | 581 TOKEN | 9,146 TOKEN | 94.0% |
 
-- Startup registers only `mcp__<server>__activate` / `mcp__<server>__deactivate` per configured server.
-- When the model calls `activate`, the plugin connects that server and registers all of its tools; they are usable for the rest of the turn.
-- By default (`releaseOnTurnEnd: true`), when a turn ends and no session is still using the server, the bridge disconnects and unregisters every tool. `agent/disposed` acts as a fallback release path.
-- Accidental disconnects unregister tools automatically; calling `activate` again reconnects. No automatic reconnect (redundant cost in on-demand mode).
+以合计数据为例，如果连续 10 轮都没有用到这三个 MCP 服务器，进入模型请求的工具定义大约可少 91,460 个近似 TOKEN。
 
-The tool naming, call semantics and result projection follow the same conventions as `@deepseek-ai/dsh-mcp-client`, so the model sees tools in a familiar shape.
+这组数字只比较工具目录，不等同于 DeepSeek API 账单中的精确 TOKEN。模型使用的分词器、提示词缓存、MCP 版本和工具结构都会改变最终数值，所以实际用量应以服务端返回为准。
 
-## Install / 安装
+## 什么时候省，什么时候不省
+
+- 服务器未激活时，目录里只有两个控制工具，省得最多。
+- 激活服务器后，它的全部工具会在当前轮注册；这一轮仍要承担该服务器的工具定义 TOKEN。
+- 默认会在轮次结束时卸载工具，下一轮恢复到两个控制工具。
+- 如果服务器本来只有一两个很短的工具，按需模式的 TOKEN 优势可能很小。
+- `autoActivate: true` 会在启动时直接连接服务器，相当于关闭懒加载，不再节省这部分 TOKEN。
+
+## 安装
 
 ```sh
 dsh plugin --profile web add github:leaforbook/dsh-mcp-lazy
 ```
 
-This project is distributed directly from GitHub and is not published to npm. / 本项目直接通过 GitHub 分发，不发布到 npm。
+本项目直接通过 GitHub 分发，不发布到 npm。
 
-## Configure / 配置
+## 配置
 
-Add one `- id: mcp-lazy` entry per MCP server in your profile's `cordis.patch.yml`:
-
-在 profile 的 `cordis.patch.yml` 中为每个 MCP 服务器加一条 `- id: mcp-lazy` 条目：
+在对应配置目录的 `cordis.patch.yml` 中，每个 MCP 服务器写一条配置：
 
 ```yaml
 - insert:
@@ -40,8 +48,8 @@ Add one `- id: mcp-lazy` entry per MCP server in your profile's `cordis.patch.ym
         serverName: filesystem
         command: npx
         args: [-y, '@modelcontextprotocol/server-filesystem', '/tmp']
-        autoActivate: false          # connect at startup instead (default false)
-        releaseOnTurnEnd: true       # disconnect at end of turn (default true)
+        autoActivate: false          # 是否在启动时直接连接，默认 false
+        releaseOnTurnEnd: true       # 是否在轮次结束后断开，默认 true
 
     - id: mcp-lazy
       name: '@xiaoyilin/dsh-mcp-lazy'
@@ -52,30 +60,32 @@ Add one `- id: mcp-lazy` entry per MCP server in your profile's `cordis.patch.ym
         headers: {}
 ```
 
-### Config options / 配置项
+### 配置项
 
-| Key / 键 | Type / 类型 | Default / 默认 | Description / 说明 |
+| 配置键 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `transport` | `stdio` \| `streamable-http` | — | Required. Transport for the MCP server. / 必填，MCP 传输方式。 |
-| `serverName` | string | — | Required. `[A-Za-z0-9_-]{1,32}`; prefixes the control tools. / 必填，作为控制工具名前缀。 |
-| `command` / `args` / `env` / `cwd` | — | — | stdio transport: process to spawn (`env` merges over the scrubbed parent env). / stdio 方式：启动命令（`env` 在脱敏父环境上合并）。 |
-| `url` / `headers` | — | — | streamable-http transport: endpoint URL and headers. / HTTP 方式：端点与请求头。 |
-| `toolCallTimeoutMs` | number | `60000` | Per-tool-call timeout. / 单次工具调用超时。 |
-| `autoActivate` | boolean | `false` | Connect at startup instead of on demand. / 启动即连接（退回常驻模式）。 |
-| `releaseOnTurnEnd` | boolean | `true` | Disconnect when the turn ends and no session is using the server. / 轮次结束且无会话使用时自动断开。 |
+| `transport` | `stdio` \| `streamable-http` | — | 必填。MCP 传输方式。 |
+| `serverName` | string | — | 必填。允许 `[A-Za-z0-9_-]{1,32}`，同时用作工具名前缀。 |
+| `command` / `args` / `env` / `cwd` | — | — | `stdio` 启动参数。`env` 会合并到脱敏后的父进程环境。 |
+| `url` / `headers` | — | — | `streamable-http` 的服务地址和请求头。 |
+| `toolCallTimeoutMs` | number | `60000` | 单次工具调用超时，单位为毫秒。 |
+| `autoActivate` | boolean | `false` | 启动时直接连接服务器。开启后不再按需加载。 |
+| `releaseOnTurnEnd` | boolean | `true` | 本轮结束且没有会话继续使用时，自动断开服务器并卸载工具。 |
 
-## How it works / 工作原理
+## 工作原理
 
-1. Each configured server registers two control tools: `mcp__<server>__activate` and `mcp__<server>__deactivate`.
-2. `activate` connects (stdio child process or streamable HTTP), fetches `tools/list` with pagination, and registers every tool under the same public-name contract as `dsh-mcp-client` (`mcp__<server>__<tool>`, sanitized to `[A-Za-z0-9_-]`, 64-char cap with a 12-hex hash on collision).
-3. Tool use marks the calling agent as a user of that server; on `agent/turn-stopping` the agent is removed from the user set, and when the set empties the server disconnects and its tools unregister. `agent/disposed` always releases.
-4. `tools/list/changed` re-syncs registered tools on the fly; a dropped connection unregisters everything and logs — call `activate` again to recover.
+1. 每个服务器先注册 `mcp__<server>__activate` 和 `mcp__<server>__deactivate` 两个控制工具。
+2. 调用 `activate` 后，插件通过 `stdio` 或 `streamable-http` 连接服务器，分页读取 `tools/list`，再注册服务器提供的全部工具。
+3. 工具名沿用 `dsh-mcp-client` 的规则：`mcp__<server>__<tool>`。名称只保留 `[A-Za-z0-9_-]`，最长 64 个字符；出现冲突时追加 12 位哈希。
+4. 默认在 `agent/turn-stopping` 时释放本轮占用。`agent/disposed` 负责处理会话直接结束的情况。
+5. 收到 `tools/list/changed` 后会重新同步工具。连接意外断开时，插件会立即卸载旧工具；再次调用 `activate` 即可恢复。
 
-## Limitations / 限制
+## 限制
 
-- Tools that require task-based execution (`tool.execution.taskSupport === 'required'`) are rejected with a clear error; the bridge does not implement task plumbing. / 声明必须任务化执行的工具会报错拒绝（桥接层不实现 task 管道）。
-- No automatic reconnect — by design in on-demand mode. / 不做自动重连——按需模式下的刻意设计。
+- 不支持必须以任务方式执行的工具，即 `tool.execution.taskSupport === 'required'`。遇到这类工具会直接返回错误。
+- 连接断开后不会自动重连。按需模式下，重新调用 `activate` 更可控，也不会让闲置服务器在后台反复启动。
+- TOKEN 数据是工具定义的近似值，不代表请求的全部输入，也不能直接换算成账单金额。
 
-## License / 许可证
+## 许可证
 
 MIT
