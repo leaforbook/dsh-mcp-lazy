@@ -17,6 +17,17 @@ function catalog(name, fingerprint = name) {
   }]])
 }
 
+function clientBoundCatalog(client) {
+  return new Map([['stable-tool', {
+    fingerprint: 'stable-fingerprint',
+    summary: { name: 'stable-tool', description: 'stable description' },
+    definition: {
+      name: 'stable-tool',
+      execute() { return client.name }
+    }
+  }]])
+}
+
 function createAdapter({ failName } = {}) {
   const definitions = new Map()
   return {
@@ -147,6 +158,66 @@ test('failed refresh registration preserves the last published catalog', async (
     ])
     assert.deepEqual([...adapter.definitions.keys()], ['old-tool'])
   } finally {
+    await runtime.dispose()
+  }
+})
+
+test('concurrent activation during cold discovery never republishes retained executors', async () => {
+  const adapter = createAdapter()
+  const nextDiscovery = deferred()
+  const previousClient = createClient('previous-client')
+  const currentClient = createClient('current-client')
+  const clients = [previousClient, currentClient]
+  const previousAgent = { id: 'previous-agent' }
+  let connectionAttempts = 0
+  let discoveryAttempts = 0
+  let firstActivation
+  let secondActivation
+  const runtime = createServerRuntime(runtimeOptions({
+    adapter,
+    config: {
+      serverName: 'runtime-fixture',
+      autoActivate: false,
+      releaseOnTurnEnd: true,
+      warmIdleMs: 20
+    },
+    async createConnectedClient() { return clients[connectionAttempts++] },
+    async discoverDefinitions(client) {
+      discoveryAttempts += 1
+      if (discoveryAttempts === 1) return clientBoundCatalog(client)
+      return nextDiscovery.promise
+    }
+  }))
+
+  try {
+    await runtime.activate(previousAgent)
+    assert.equal(adapter.definitions.get('stable-tool').execute(), 'previous-client')
+    runtime.onTurnStopping({ agent: previousAgent })
+    await waitFor(
+      () => previousClient.closeCalls === 1 && adapter.definitions.size === 0,
+      'warm expiry closes the previous client and unpublishes its schemas'
+    )
+
+    firstActivation = runtime.activate({ id: 'first-current-agent' })
+    await waitFor(() => discoveryAttempts === 2, 'new cold discovery starts')
+    let secondSettled = false
+    secondActivation = runtime.activate({ id: 'second-current-agent' }).then((result) => {
+      secondSettled = true
+      return result
+    })
+    await new Promise((resolve) => setImmediate(resolve))
+
+    assert.equal(secondSettled, false, 'concurrent activation must wait for current discovery')
+    assert.equal(adapter.definitions.size, 0, 'retained schemas must stay unpublished during cold discovery')
+
+    nextDiscovery.resolve(clientBoundCatalog(currentClient))
+    const [firstResult, secondResult] = await Promise.all([firstActivation, secondActivation])
+    assert.equal(secondResult, firstResult)
+    assert.equal(adapter.definitions.get('stable-tool').execute(), 'current-client')
+    assert.equal(connectionAttempts, 2)
+  } finally {
+    nextDiscovery.resolve(clientBoundCatalog(currentClient))
+    await Promise.allSettled([firstActivation, secondActivation].filter(Boolean))
     await runtime.dispose()
   }
 })
