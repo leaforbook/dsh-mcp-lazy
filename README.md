@@ -20,8 +20,10 @@ The tool naming, call semantics and result projection follow the same convention
 ## Install / 安装
 
 ```sh
-dsh plugin --profile web add @xiaoyilin/dsh-mcp-lazy
+dsh plugin --profile web add github:leaforbook/dsh-mcp-lazy
 ```
+
+This project is distributed directly from GitHub and is not published to npm. / 本项目直接通过 GitHub 分发，不发布到 npm。
 
 ## Configure / 配置
 
