@@ -221,3 +221,36 @@ test('concurrent activation during cold discovery never republishes retained exe
     await runtime.dispose()
   }
 })
+
+test('turn stopping clears reconnect demand without releasing persistent schemas', async () => {
+  const adapter = createAdapter()
+  const clients = []
+  const callbacks = []
+  let connectionAttempts = 0
+  const runtime = createServerRuntime(runtimeOptions({
+    adapter,
+    async createConnectedClient(_signal, handlers) {
+      const client = createClient(`persistent-${connectionAttempts + 1}`)
+      clients.push(client)
+      callbacks.push(handlers)
+      connectionAttempts += 1
+      return client
+    },
+    async discoverDefinitions() { return catalog('persistent-tool') }
+  }))
+
+  try {
+    const agent = { id: 'persistent-agent' }
+    await runtime.activate(agent)
+    runtime.onTurnStopping({ agent })
+    assert.ok(adapter.definitions.has('persistent-tool'), 'turn stop must not release persistent schemas')
+
+    callbacks[0].onClose(clients[0])
+    await new Promise((resolve) => setTimeout(resolve, 250))
+
+    assert.equal(connectionAttempts, 1)
+    assert.equal(adapter.definitions.size, 0)
+  } finally {
+    await runtime.dispose()
+  }
+})
