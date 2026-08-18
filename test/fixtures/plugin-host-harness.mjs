@@ -89,6 +89,13 @@ async function starts(stateFile) {
   try { return Number.parseInt(await readFile(stateFile, 'utf8'), 10) || 0 } catch { return 0 }
 }
 
+async function unconfiguredInstanceIsNoOp() {
+  const context = createContext()
+  await assert.doesNotReject(() => apply(context, undefined))
+  assert.equal(context.definitions.size, 0)
+  context.cleanup()
+}
+
 async function fullLifecycle() {
   const stateFile = join(tempRoot, 'full-starts')
   await writeFile(stateFile, '0')
@@ -179,6 +186,7 @@ async function activationHonorsAbortSignal() {
 }
 
 try {
+  await unconfiguredInstanceIsNoOp()
   await fullLifecycle()
   await demandDisappearsDuringReconnect()
   await activationHonorsAbortSignal()
