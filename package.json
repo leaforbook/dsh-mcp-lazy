@@ -1,7 +1,7 @@
 {
-  "name": "@xiaoyilin/dsh-mcp-lazy",
+  "name": "@yilinxiao/dsh-mcp-lazy",
   "version": "0.4.0",
-  "description": "Lazy MCP bridge for DeepSeek Harness: one shared search/activation router plus per-server activate/deactivate controls load native tools on demand. · DSH 按需 MCP 桥接：一个共享搜索激活路由器加每服务器激活/停用控制工具，按需加载原生工具。",
+  "description": "Lazy MCP bridge for DeepSeek Harness that loads tools on demand to reduce tool-catalog context tokens while keeping connections warm for reuse. · DSH 按需 MCP 桥接：按需加载工具以减少工具目录占用的上下文 Token，并保温连接以便复用。",
   "type": "module",
   "main": "lib/index.js",
   "license": "MIT",
@@ -23,7 +23,11 @@
     "lazy-loading"
   ],
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "prepublishOnly": "npm test"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.1",

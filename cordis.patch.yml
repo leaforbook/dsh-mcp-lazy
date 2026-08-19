@@ -1,4 +1,4 @@
 - insert:
     - id: mcp-lazy
-      name: '@xiaoyilin/dsh-mcp-lazy'
+      name: '@yilinxiao/dsh-mcp-lazy'
       disabled: true

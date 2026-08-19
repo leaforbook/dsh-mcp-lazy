@@ -1,4 +1,4 @@
-# @xiaoyilin/dsh-mcp-lazy
+# @yilinxiao/dsh-mcp-lazy
 
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的按需 MCP 桥接插件。它不会在启动时把 MCP 服务器的全部工具塞进工具目录，而是为每个服务器保留 `activate` 和 `deactivate` 两个控制工具，并在同一工具域共享一个 `mcp__router__search_and_activate` 路由工具。需要哪个服务器时，可让路由器搜索并激活，也可明确调用服务器自己的 `activate`；本轮结束后立即卸载远端工具 Schema，默认将连接保温 5 分钟以便下一轮复用。
 
@@ -47,10 +47,10 @@
 ## 安装
 
 ```sh
-dsh plugin --profile web add -w github:leaforbook/dsh-mcp-lazy
+dsh plugin --profile web add @yilinxiao/dsh-mcp-lazy
 ```
 
-本项目直接通过 GitHub 分发，不发布到 npm。
+推荐通过 npm 安装；源码与发布记录仍保存在 [GitHub](https://github.com/leaforbook/dsh-mcp-lazy)。
 
 安装时会加入一个默认停用的 `mcp-lazy` 配置占位，不会在缺少服务器参数时启动插件。完成下面的服务器配置后才会实际连接 MCP。
 
@@ -61,7 +61,7 @@ dsh plugin --profile web add -w github:leaforbook/dsh-mcp-lazy
 ```yaml
 - insert:
     - id: mcp-lazy
-      name: '@xiaoyilin/dsh-mcp-lazy'
+      name: '@yilinxiao/dsh-mcp-lazy'
       config:
         transport: stdio
         serverName: filesystem
@@ -77,7 +77,7 @@ dsh plugin --profile web add -w github:leaforbook/dsh-mcp-lazy
         routingHints: [文件, 目录]    # 供共享路由器匹配的提示词，默认 []
 
     - id: mcp-lazy
-      name: '@xiaoyilin/dsh-mcp-lazy'
+      name: '@yilinxiao/dsh-mcp-lazy'
       config:
         transport: streamable-http
         serverName: remote-api

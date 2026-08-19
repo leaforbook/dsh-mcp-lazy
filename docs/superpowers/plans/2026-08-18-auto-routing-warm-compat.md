@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Release `@xiaoyilin/dsh-mcp-lazy` 0.4.0 with one shared search-and-activate router, five-minute connection warming while tool schemas remain unloaded, and a capability-probed DSH adapter tested against rc.6 and rc.7.
+**Goal:** Release `@yilinxiao/dsh-mcp-lazy` 0.4.0 with one shared search-and-activate router, five-minute connection warming while tool schemas remain unloaded, and a capability-probed DSH adapter tested against rc.6 and rc.7.
 
 **Architecture:** `lib/dsh-adapter.js` contains every DSH-specific operation, `lib/tool-router.js` owns a shared router registry keyed by the adapter identity, and `lib/server-runtime.js` owns one MCP server's connection/catalog/publication state. `lib/index.js` remains the composition root that builds MCP transports and tool definitions, then wires those three modules together.
 
@@ -734,13 +734,13 @@ Expected: all tests pass, diff check is empty, and only intended commits are ahe
 
 ```bash
 rtk git push origin main
-rtk pnpm update @xiaoyilin/dsh-mcp-lazy
+rtk pnpm update @yilinxiao/dsh-mcp-lazy
 ```
 
 Run the second command in `~/.dsh/profiles/web`. Verify installed version with:
 
 ```bash
-rtk node -p 'require("./node_modules/@xiaoyilin/dsh-mcp-lazy/package.json").version'
+rtk node -p 'require("./node_modules/@yilinxiao/dsh-mcp-lazy/package.json").version'
 ```
 
 Expected: `0.4.0`.
@@ -774,7 +774,7 @@ In a new DSH session using DeepSeek-V4-Pro Max:
 Remove the temporary fixture block and its `/tmp` state file, restart the service, and verify:
 
 ```bash
-rtk rg -c "^      name: '@xiaoyilin/dsh-mcp-lazy'$" /Users/xiaoyilin/.dsh/cordis.patch.yml
+rtk rg -c "^      name: '@yilinxiao/dsh-mcp-lazy'$" /Users/xiaoyilin/.dsh/cordis.patch.yml
 rtk curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3080/
 rtk npm test
 rtk git status --short --branch
