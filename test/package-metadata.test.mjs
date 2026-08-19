@@ -7,7 +7,7 @@ const bundlePatch = await readFile(new URL('../cordis.patch.yml', import.meta.ur
 
 test('package metadata publishes the installable bundle from the npm owner scope', () => {
   assert.equal(pkg.name, '@yilinxiao/dsh-mcp-lazy')
-  assert.equal(pkg.version, '0.4.0')
+  assert.equal(pkg.version, '0.4.1')
   assert.equal(pkg.repository.url, 'git+https://github.com/leaforbook/dsh-mcp-lazy.git')
   assert.equal(pkg.homepage, 'https://github.com/leaforbook/dsh-mcp-lazy#readme')
   assert.equal(pkg.bugs.url, 'https://github.com/leaforbook/dsh-mcp-lazy/issues')
@@ -15,4 +15,20 @@ test('package metadata publishes the installable bundle from the npm owner scope
   assert.deepEqual(pkg.dsh, { bundle: { patch: './cordis.patch.yml' } })
   assert.ok(pkg.files.includes('cordis.patch.yml'))
   assert.match(bundlePatch, /name: '@yilinxiao\/dsh-mcp-lazy'/)
+})
+
+test('package discovery metadata exposes the MCP token-saving use case', () => {
+  assert.match(pkg.description, /MCP lazy-loading/i)
+  assert.match(pkg.description, /context bloat/i)
+  assert.match(pkg.description, /save tokens/i)
+  for (const keyword of [
+    'token-saving',
+    'context-optimization',
+    'tool-schema',
+    'tool-router',
+    'mcp-router',
+    'on-demand-tools',
+  ]) {
+    assert.ok(pkg.keywords.includes(keyword), `missing npm discovery keyword: ${keyword}`)
+  }
 })

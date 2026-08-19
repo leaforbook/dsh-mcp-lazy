@@ -1,7 +1,7 @@
 {
   "name": "@yilinxiao/dsh-mcp-lazy",
-  "version": "0.4.0",
-  "description": "Lazy MCP bridge for DeepSeek Harness that loads tools on demand to reduce tool-catalog context tokens while keeping connections warm for reuse. · DSH 按需 MCP 桥接：按需加载工具以减少工具目录占用的上下文 Token，并保温连接以便复用。",
+  "version": "0.4.1",
+  "description": "MCP lazy-loading, dynamic tool-loading, and Tool Router plugin for DeepSeek Harness that loads MCP tools on demand to reduce context bloat and save tokens, unloads idle tool schemas at turn end, and keeps connections warm for reuse. · DSH 的 MCP懒加载、动态加载工具与 Tool Router 插件：解决 MCP工具过多造成的上下文膨胀和Token浪费，按需加载MCP工具并在轮末卸载闲置工具Schema，以减少Token占用、节省Token，同时保温连接便于复用。",
   "type": "module",
   "main": "lib/index.js",
   "license": "MIT",
@@ -20,7 +20,13 @@
     "dsh-plugin",
     "mcp",
     "model-context-protocol",
-    "lazy-loading"
+    "lazy-loading",
+    "token-saving",
+    "context-optimization",
+    "tool-schema",
+    "tool-router",
+    "mcp-router",
+    "on-demand-tools"
   ],
   "scripts": {
     "test": "node --test test/*.test.mjs",

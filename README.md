@@ -1,6 +1,8 @@
 # @yilinxiao/dsh-mcp-lazy
 
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的按需 MCP 桥接插件。它不会在启动时把 MCP 服务器的全部工具塞进工具目录，而是为每个服务器保留 `activate` 和 `deactivate` 两个控制工具，并在同一工具域共享一个 `mcp__router__search_and_activate` 路由工具。需要哪个服务器时，可让路由器搜索并激活，也可明确调用服务器自己的 `activate`；本轮结束后立即卸载远端工具 Schema，默认将连接保温 5 分钟以便下一轮复用。
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的 MCP懒加载、动态加载工具与 Tool Router 插件：解决同时配置多个 MCP 服务器时 MCP工具过多、工具Schema常驻、工具目录过长造成的上下文膨胀和Token浪费。插件只在当前任务需要时搜索、路由并按需加载MCP工具，轮次结束后卸载闲置工具Schema，以减少Token占用、节省Token；连接继续保温，短时间内再次使用可快速复用。支持显式激活、自动路由、工具目录分页刷新、有限自动重连，以及 stdio 和 Streamable HTTP MCP 传输。
+
+它不会在启动时把 MCP 服务器的全部工具塞进工具目录，而是为每个服务器保留 `activate` 和 `deactivate` 两个控制工具，并在同一工具域共享一个 `mcp__router__search_and_activate` 路由工具。需要哪个服务器时，可让路由器搜索并激活，也可明确调用服务器自己的 `activate`；本轮结束后立即卸载远端工具 Schema，默认将连接保温 5 分钟以便下一轮复用。
 
 这样做主要是为了少占 TOKEN。工具的名称、说明和参数结构会随模型请求一起进入上下文。MCP 服务器越多、工具定义越长，常驻目录消耗的输入 TOKEN 就越多。这个插件让没用到的工具不进入当轮请求。
 
