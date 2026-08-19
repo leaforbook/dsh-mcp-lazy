@@ -52,6 +52,8 @@ dsh plugin --profile web add -w github:leaforbook/dsh-mcp-lazy
 
 本项目直接通过 GitHub 分发，不发布到 npm。
 
+安装时会加入一个默认停用的 `mcp-lazy` 配置占位，不会在缺少服务器参数时启动插件。完成下面的服务器配置后才会实际连接 MCP。
+
 ## 配置
 
 在对应配置目录的 `cordis.patch.yml` 中，每个 MCP 服务器写一条配置：
