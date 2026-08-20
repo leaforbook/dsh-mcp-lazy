@@ -256,10 +256,17 @@ function configurationDefaults() {
 }
 
 async function universalManagerLifecycle() {
+  const stateFile = join(tempRoot, 'universal-managed-starts')
+  await writeFile(stateFile, '0')
   const context = createContext()
   await assert.doesNotReject(() => apply(context, { mode: 'manager' }))
   await applyPassiveToolProvider(context, { serverName: 'passive-alpha', conforming: true, counter: { value: 0 } })
   await applyPassiveToolProvider(context, { serverName: 'passive-beta', conforming: true, counter: { value: 0 } })
+  await apply(context, config(stateFile, {
+    serverName: 'managed-fixture',
+    args: [fixture, stateFile, '0', '0'],
+    routingHints: ['managed fixture']
+  }))
 
   const first = context.createAgent('universal-first')
   const second = context.createAgent('universal-second')
@@ -273,6 +280,19 @@ async function universalManagerLifecycle() {
     /missing registered tool: mcp__passive-alpha__echo/
   )
 
+  const managedRoute = await call(context, routerToolName, {
+    query: 'managed fixture echo',
+    serverName: 'managed-fixture'
+  }, first)
+  assert.match(managedRoute.content[0].text, /managed-fixture/)
+  assert.equal(await starts(stateFile), 1)
+  assert.ok(context.visibleNames(first).includes('mcp__managed-fixture__echo'))
+  assert.deepEqual(context.visibleNames(second), [routerToolName])
+  assert.equal(
+    (await call(context, 'mcp__managed-fixture__echo', { text: 'managed-host-ok' }, first)).content[0].text,
+    'managed-host-ok'
+  )
+
   const routed = await call(context, routerToolName, {
     query: 'passive alpha echo',
     serverName: 'passive-alpha'
@@ -284,6 +304,7 @@ async function universalManagerLifecycle() {
     routerToolName
   ])
   assert.deepEqual(context.visibleNames(second), [routerToolName])
+  assert.ok(!context.visibleNames(first).includes('mcp__managed-fixture__echo'))
 
   const echo = await call(context, 'mcp__passive-alpha__echo', { text: 'passive-host-ok' }, first)
   assert.deepEqual(echo, {
@@ -296,6 +317,8 @@ async function universalManagerLifecycle() {
   context.cleanup()
   assert.equal(context.definitions.size, 0)
   assert.equal(context.handlerCount(), 0)
+  assert.equal(first.restrictions.size, 0)
+  assert.equal(second.restrictions.size, 0)
 }
 
 async function fullLifecycle() {
