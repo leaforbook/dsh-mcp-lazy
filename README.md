@@ -1,6 +1,8 @@
 # @yilinxiao/dsh-mcp-lazy 0.5.0
 
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的 MCP Token 节省插件。0.5.0 安装后会自动发现并接管通过**兼容性准入**的 DSH MCP：在受管理 MCP 的工具面中，冷启动时模型默认只看到一个共享路由 `mcp__router__search_and_activate`；路由选中服务器后，才向当前会话做 **Schema 按需披露**。下一轮会重新隐藏，避免其他 MCP 的名称、说明和参数结构持续占用模型上下文。普通 DSH 工具不在本插件的过滤范围内。
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的 MCP懒加载、动态加载工具与 Tool Router 插件：解决同时配置多个 MCP 服务器时 MCP工具过多、工具 Schema 常驻、工具目录过长造成的上下文膨胀和 Token 浪费。0.5.0 安装后会自动发现并接管通过**兼容性准入**的 DSH MCP：在受管理 MCP 的工具面中，冷启动时模型默认只看到一个共享路由 `mcp__router__search_and_activate`；路由选中服务器后，才向当前会话做 **Schema 按需披露**。下一轮会重新隐藏，减少 Token 占用；普通 DSH 工具和无法确认兼容的 MCP 保持原样。
+
+对于显式配置到本插件的 MCP，仍支持按需连接、轮末卸载闲置 Schema、连接保温、工具目录分页刷新、有限自动重连，以及 stdio 和 Streamable HTTP 传输。短时间内再次使用可以直接复用连接。
 
 这是 schema progressive disclosure（模型侧工具 Schema 的渐进披露），不是对第三方 MCP 进程的强制代理。对显式配置到本插件的服务器，仍提供完整的**连接层懒加载**（按需连接、轮末卸载 Schema、可保温复用连接）；其他兼容 DSH MCP 的连接、重试、附件和执行逻辑始终由原插件负责。
 

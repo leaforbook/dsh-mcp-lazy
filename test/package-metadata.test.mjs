@@ -19,3 +19,19 @@ test('package metadata publishes the installable bundle from the npm owner scope
   assert.ok(pkg.files.includes('cordis.patch.yml'))
   assert.match(bundlePatch, /name: '@yilinxiao\/dsh-mcp-lazy'/)
 })
+
+test('package discovery metadata exposes the MCP token-saving use case', () => {
+  assert.match(pkg.description, /MCP lazy-loading/i)
+  assert.match(pkg.description, /context bloat/i)
+  assert.match(pkg.description, /save tokens/i)
+  for (const keyword of [
+    'token-saving',
+    'context-optimization',
+    'tool-schema',
+    'tool-router',
+    'mcp-router',
+    'on-demand-tools',
+  ]) {
+    assert.ok(pkg.keywords.includes(keyword), `missing npm discovery keyword: ${keyword}`)
+  }
+})
