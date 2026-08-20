@@ -5,6 +5,7 @@ import {
   ROUTER_TOOL_NAME,
   registerRouterCompatibleTool,
   registerRouterServer,
+  registerRouterVisibility,
   selectRoute
 } from '../lib/tool-router.js'
 
@@ -73,6 +74,158 @@ function routerEntry(serverName) {
     activate: async () => `${serverName} active`
   }
 }
+
+test('a visibility controller publishes the router and reveals one passive server', async () => {
+  const host = throwingRegistryAdapter({})
+  const revealed = []
+  const dispose = registerRouterVisibility(host.adapter, {
+    getEntries: () => [{
+      serverName: 'passive',
+      routingHints: [],
+      getCatalog: () => [{ name: 'mcp__passive__echo', description: 'echo text' }]
+    }],
+    reveal: async (agent, serverName) => {
+      revealed.push([agent.id, serverName])
+      return '1 个工具已披露'
+    }
+  })
+  const result = await host.definitions.get(ROUTER_TOOL_NAME).execute(
+    { query: 'echo text' },
+    { agent: { id: 'a' }, signal: new AbortController().signal }
+  )
+  assert.deepEqual(revealed, [['a', 'passive']])
+  assert.match(result.content[0].text, /passive/)
+  dispose()
+  assert.equal(host.definitions.size, 0)
+})
+
+test('a managed server wins a passive name and activates before revealing', async () => {
+  const host = throwingRegistryAdapter({})
+  const calls = []
+  const disposeVisibility = registerRouterVisibility(host.adapter, {
+    getEntries: () => [{
+      serverName: 'same',
+      routingHints: [],
+      getCatalog: () => [{ name: 'mcp__same__passive', description: 'passive' }]
+    }],
+    reveal: (agent, serverName) => {
+      calls.push(['reveal', agent.id, serverName])
+      return '已披露'
+    }
+  })
+  const disposeManaged = registerRouterServer(host.adapter, {
+    serverName: 'same',
+    routingHints: [],
+    getCatalog: () => [{ name: 'mcp__same__managed', description: 'managed' }],
+    activate: async (agent) => {
+      calls.push(['activate', agent.id, 'same'])
+      return '已激活'
+    }
+  })
+
+  await host.definitions.get(ROUTER_TOOL_NAME).execute(
+    { query: 'managed', serverName: 'same' },
+    { agent: { id: 'a' }, signal: new AbortController().signal }
+  )
+
+  assert.deepEqual(calls, [['activate', 'a', 'same'], ['reveal', 'a', 'same']])
+  disposeManaged()
+  disposeVisibility()
+})
+
+test('a passive reveal rejection rejects router execution', async () => {
+  const host = throwingRegistryAdapter({})
+  const dispose = registerRouterVisibility(host.adapter, {
+    getEntries: () => [{
+      serverName: 'failing-passive',
+      routingHints: [],
+      getCatalog: () => [{ name: 'mcp__failing-passive__tool', description: 'failing tool' }]
+    }],
+    reveal: async () => { throw new Error('reveal failed') }
+  })
+
+  await assert.rejects(
+    host.definitions.get(ROUTER_TOOL_NAME).execute(
+      { query: 'failing tool' },
+      { agent: { id: 'a' }, signal: new AbortController().signal }
+    ),
+    /reveal failed/
+  )
+  dispose()
+})
+
+test('disposing visibility leaves a managed router entry active', async () => {
+  const host = throwingRegistryAdapter({})
+  let activations = 0
+  const disposeManaged = registerRouterServer(host.adapter, {
+    serverName: 'managed',
+    routingHints: [],
+    getCatalog: () => [{ name: 'mcp__managed__tool', description: 'managed tool' }],
+    activate: async () => { activations += 1; return '已激活' }
+  })
+  const disposeVisibility = registerRouterVisibility(host.adapter, {
+    getEntries: () => [],
+    reveal: () => '不应调用'
+  })
+
+  disposeVisibility()
+  assert.ok(host.definitions.has(ROUTER_TOOL_NAME))
+  await host.definitions.get(ROUTER_TOOL_NAME).execute(
+    { query: 'managed tool' },
+    { agent: { id: 'a' }, signal: new AbortController().signal }
+  )
+  assert.equal(activations, 1)
+  disposeManaged()
+  assert.equal(host.definitions.size, 0)
+})
+
+test('disposing the last managed entry leaves a passive router active', async () => {
+  const host = throwingRegistryAdapter({})
+  let revealed = 0
+  const disposeManaged = registerRouterServer(host.adapter, routerEntry('managed'))
+  const disposeVisibility = registerRouterVisibility(host.adapter, {
+    getEntries: () => [{
+      serverName: 'passive',
+      routingHints: [],
+      getCatalog: () => [{ name: 'mcp__passive__tool', description: 'passive tool' }]
+    }],
+    reveal: () => { revealed += 1; return '已披露' }
+  })
+
+  disposeManaged()
+  assert.ok(host.definitions.has(ROUTER_TOOL_NAME))
+  await host.definitions.get(ROUTER_TOOL_NAME).execute(
+    { query: 'passive tool' },
+    { agent: { id: 'a' }, signal: new AbortController().signal }
+  )
+  assert.equal(revealed, 1)
+  disposeVisibility()
+  assert.equal(host.definitions.size, 0)
+})
+
+test('duplicate visibility registration preserves the first controller', async () => {
+  const host = throwingRegistryAdapter({})
+  let firstReveals = 0
+  const dispose = registerRouterVisibility(host.adapter, {
+    getEntries: () => [{
+      serverName: 'first',
+      routingHints: [],
+      getCatalog: () => [{ name: 'mcp__first__tool', description: 'first tool' }]
+    }],
+    reveal: () => { firstReveals += 1; return 'first disclosed' }
+  })
+
+  assert.throws(
+    () => registerRouterVisibility(host.adapter, { getEntries: () => [], reveal: () => 'second disclosed' }),
+    /visibility controller is already registered/
+  )
+  await host.definitions.get(ROUTER_TOOL_NAME).execute(
+    { query: 'first tool' },
+    { agent: { id: 'a' }, signal: new AbortController().signal }
+  )
+  assert.equal(firstReveals, 1)
+  dispose()
+})
 
 function fiberRegistryAdapter(identity, fiberName, state, {
   throwNativeDisposeOnce = false,
