@@ -11,6 +11,7 @@ const output = {
 }
 
 const counters = new Map()
+const inject = ['tools']
 
 function apply(ctx, config) {
   const prefix = config.conforming ? `mcp__${config.serverName}__` : 'mcp_fixture_nonconforming_'
@@ -38,4 +39,4 @@ function apply(ctx, config) {
   }, `fixture.${config.serverName}`)
 }
 
-export { apply }
+export { apply, inject }
