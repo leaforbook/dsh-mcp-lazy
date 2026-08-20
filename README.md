@@ -44,13 +44,14 @@ dsh plugin --profile web add @yilinxiao/dsh-mcp-lazy
 
 ### 关闭自动接管
 
-要恢复所有 MCP 的原有 schema 可见性，只禁用 manager 条目即可；显式 lazy server 配置不会受影响：
+要恢复所有 MCP 的原有 schema 可见性，只禁用 manager 条目即可；显式 lazy server 配置不会受影响。在 `$DSH_HOME/profiles/web/cordis.patch.yml` 增加 profile 覆盖：
 
-```sh
-dsh plugin --profile web disable mcp-lazy-manager
+```yaml
+- id: mcp-lazy-manager
+  disabled: true
 ```
 
-也可以在对应 profile 的 patch 中移除或禁用 id 为 `mcp-lazy-manager` 的条目。无需卸载本 npm 包，也不要修改第三方 MCP 的配置、URL 或凭据。
+该覆盖只会禁用 bundle 自动插入的 manager；同一 profile 中的显式 `dsh-mcp-lazy` server 条目仍可继续提供连接层懒加载。请保留该覆盖：删除它会让包内 bundle 再次启用 `mcp-lazy-manager`。无需卸载本 npm 包，也不要修改第三方 MCP 的配置、URL 或凭据。
 
 ## 配置
 
