@@ -678,6 +678,31 @@ test('duplicate agent disposal retries and releases a retired transient restrict
   assert.equal(disposalAttempts, 2, 'successfully retired record is not retained until manager cleanup')
 })
 
+test('ordinary reconciliation retries a retired transient restriction after one agent disposal event', () => {
+  let disposalAttempts = 0
+  const host = createHost({
+    restrictionDisposeFactory({ defaultDispose }) {
+      return () => {
+        disposalAttempts += 1
+        if (disposalAttempts === 1) throw new Error('transient retired restriction')
+        defaultDispose()
+      }
+    }
+  })
+  const disposeManager = install(host)
+  host.register(eagerTool('mcp__alpha__echo'))
+  const agent = host.createAgent('agent')
+  host.emit('agent/created', { agent })
+
+  host.emit('agent/disposed', { agent })
+  assert.equal(agent.restrictions.size, 1)
+  host.emit('tools/change')
+  assert.equal(agent.restrictions.size, 0)
+  assert.equal(disposalAttempts, 2)
+  disposeManager()
+  assert.equal(disposalAttempts, 2)
+})
+
 test('fail-open reports incomplete restriction cleanup without claiming the agent is unrestricted', () => {
   const host = createHost({
     restrictionDisposeFactory() {

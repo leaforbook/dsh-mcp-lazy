@@ -39,7 +39,8 @@ function nativeRouterDefinition() {
 
 function throwingRegistryAdapter(identity, {
   throwNativeDisposeOnce = false,
-  throwSharedDisposeOnce = false
+  throwSharedDisposeOnce = false,
+  throwToolDisposeTimes = 0
 } = {}) {
   const definitions = new Map()
   const disposalAttempts = []
@@ -51,6 +52,10 @@ function throwingRegistryAdapter(identity, {
         definitions.set(definition.name, definition)
         return () => {
           disposalAttempts.push(definition.description)
+          if (definition.name !== ROUTER_TOOL_NAME && throwToolDisposeTimes > 0) {
+            throwToolDisposeTimes -= 1
+            throw new Error('tool disposer failed')
+          }
           if (definitions.get(definition.name) === definition) definitions.delete(definition.name)
           if (definition.description === '搜索并激活最匹配的 MCP 服务器。' && throwSharedDisposeOnce) {
             throwSharedDisposeOnce = false
@@ -218,7 +223,7 @@ test('post-registration notification failure rolls back definition and managed p
   rejectNotification = true
   assert.throws(
     () => registerRouterCompatibleTool(host.adapter, definition),
-    /notification rejected/
+    error => error instanceof AggregateError && error.errors.every(item => /notification rejected/.test(item.message))
   )
   assert.equal(host.definitions.has(definition.name), false)
   assert.deepEqual(getRouterEntryStatus(host.adapter, passive), {
@@ -234,6 +239,97 @@ test('post-registration notification failure rolls back definition and managed p
     kind: 'managed'
   })
   disposePublished()
+  disposeVisibility()
+  disposeManaged()
+})
+
+test('transient rollback-disposer failure is retained and cleared before same-name registration', () => {
+  const host = throwingRegistryAdapter({}, { throwToolDisposeTimes: 1 })
+  const disposeManaged = registerRouterServer(host.adapter, {
+    serverName: 'same',
+    routingHints: [],
+    getCatalog: () => [],
+    activate: async () => 'managed'
+  })
+  let rejectNotification = true
+  const disposeVisibility = registerRouterVisibility(host.adapter, {
+    getEntries: () => [],
+    reveal: () => 'revealed',
+    onRouterStateChange() {
+      if (rejectNotification) throw new Error('notification rejected')
+    }
+  })
+  const definition = eagerRouterTool('mcp__same__managed')
+
+  assert.throws(
+    () => registerRouterCompatibleTool(host.adapter, definition),
+    error => error instanceof AggregateError && error.errors.some(item => /tool disposer failed/.test(item.message))
+  )
+  assert.equal(host.definitions.get(definition.name), definition)
+
+  rejectNotification = false
+  const replacement = eagerRouterTool(definition.name)
+  const disposeReplacement = registerRouterCompatibleTool(host.adapter, replacement)
+  assert.equal(host.definitions.get(definition.name), replacement)
+  disposeReplacement()
+  assert.equal(host.definitions.has(definition.name), false)
+  disposeVisibility()
+  disposeManaged()
+})
+
+test('permanent rollback-disposer failure remains retained and is surfaced by later registry cleanup', () => {
+  const host = throwingRegistryAdapter({}, { throwToolDisposeTimes: Number.POSITIVE_INFINITY })
+  const disposeManaged = registerRouterServer(host.adapter, {
+    serverName: 'same',
+    routingHints: [],
+    getCatalog: () => [],
+    activate: async () => 'managed'
+  })
+  let rejectNotification = true
+  const disposeVisibility = registerRouterVisibility(host.adapter, {
+    getEntries: () => [],
+    reveal: () => 'revealed',
+    onRouterStateChange() {
+      if (rejectNotification) throw new Error('notification rejected')
+    }
+  })
+  const definition = eagerRouterTool('mcp__same__managed')
+  assert.throws(() => registerRouterCompatibleTool(host.adapter, definition), AggregateError)
+  rejectNotification = false
+
+  assert.throws(disposeVisibility, /tool disposer failed/)
+  assert.throws(disposeManaged, /tool disposer failed/)
+  assert.equal(host.definitions.get(definition.name), definition)
+  assert.throws(
+    () => registerRouterVisibility(host.adapter, { getEntries: () => [], reveal: () => 'never' }),
+    /tool disposer failed/
+  )
+})
+
+test('normal returned disposer still calls underlying cleanup when provenance notification fails', () => {
+  const host = throwingRegistryAdapter({})
+  const disposeManaged = registerRouterServer(host.adapter, {
+    serverName: 'same',
+    routingHints: [],
+    getCatalog: () => [],
+    activate: async () => 'managed'
+  })
+  let rejectNotification = false
+  const disposeVisibility = registerRouterVisibility(host.adapter, {
+    getEntries: () => [],
+    reveal: () => 'revealed',
+    onRouterStateChange() {
+      if (rejectNotification) throw new Error('notification rejected')
+    }
+  })
+  const definition = eagerRouterTool('mcp__same__managed')
+  const disposePublished = registerRouterCompatibleTool(host.adapter, definition)
+  rejectNotification = true
+
+  assert.throws(disposePublished, /notification rejected/)
+  assert.equal(host.definitions.has(definition.name), false)
+  rejectNotification = false
+  assert.doesNotThrow(disposePublished)
   disposeVisibility()
   disposeManaged()
 })
