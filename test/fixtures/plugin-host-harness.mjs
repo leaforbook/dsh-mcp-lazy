@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { Config, apply } from '../../lib/index.js'
+import { apply as applyPassiveToolProvider } from './passive-tool-provider.mjs'
 
 const routerToolName = 'mcp__router__search_and_activate'
 
@@ -38,6 +39,7 @@ function createContext({
         if (definitions.has(definition.name)) throw new Error(`duplicate tool: ${definition.name}`)
         definitions.set(definition.name, definition)
         registrations.push(definition.name)
+        for (const callback of handlers.get('tools/change') ?? []) callback()
         let active = true
         return () => {
           disposalAttempts.push(definition.name)
@@ -45,7 +47,14 @@ function createContext({
           active = false
           disposals.push(definition.name)
           if (definitions.get(definition.name) === definition) definitions.delete(definition.name)
+          for (const callback of handlers.get('tools/change') ?? []) callback()
         }
+      },
+      schemas() {
+        return [...definitions.values()].map(({ name, description, parameters }) => ({ name, description, parameters }))
+      },
+      get(name) {
+        return definitions.get(name)
       }
     },
     logger: {
@@ -92,6 +101,39 @@ function createContext({
     },
     cleanupLatest() {
       return cleanups.pop()?.()
+    },
+    createAgent(id) {
+      const restrictions = new Set()
+      const visible = () => {
+        const denied = new Set([...restrictions].flatMap(restriction => [...restriction.deny]))
+        return [...definitions.values()].filter(definition => !denied.has(definition.name))
+      }
+      const agent = {
+        id,
+        restrictions,
+        ctx: {
+          tools: {
+            schemas: () => visible().map(({ name, description, parameters }) => ({ name, description, parameters })),
+            get: (name) => visible().find(definition => definition.name === name),
+            restrict({ deny }) {
+              const restriction = { deny: new Set(deny) }
+              restrictions.add(restriction)
+              for (const callback of handlers.get('tools/change') ?? []) callback()
+              let active = true
+              return () => {
+                if (!active) return
+                active = false
+                restrictions.delete(restriction)
+                for (const callback of handlers.get('tools/change') ?? []) callback()
+              }
+            }
+          }
+        }
+      }
+      return agent
+    },
+    visibleNames(agent) {
+      return agent.ctx.tools.schemas().map(schema => schema.name).sort()
     }
   }
 }
@@ -118,7 +160,10 @@ function config(stateFile, overrides = {}) {
 }
 
 async function call(context, name, args = {}, agent = {}, signal = new AbortController().signal) {
-  const definition = context.definitions.get(name)
+  const scopedTools = agent?.ctx?.tools
+  const definition = typeof scopedTools?.get === 'function'
+    ? scopedTools.get(name)
+    : context.definitions.get(name)
   assert.ok(definition, `missing registered tool: ${name}`)
   return definition.execute(args, { agent, signal })
 }
@@ -201,11 +246,56 @@ function configurationDefaults() {
     serverName: 'http-defaults',
     url: 'http://127.0.0.1:8000/mcp'
   })
+  const manager = Config({ mode: 'manager' })
 
   for (const normalized of [stdio, http]) {
     assert.equal(normalized.warmIdleMs, 300000)
     assert.deepEqual(normalized.routingHints, [])
   }
+  assert.deepEqual(manager, { mode: 'manager' })
+}
+
+async function universalManagerLifecycle() {
+  const context = createContext()
+  await assert.doesNotReject(() => apply(context, { mode: 'manager' }))
+  await applyPassiveToolProvider(context, { serverName: 'passive-alpha', conforming: true, counter: { value: 0 } })
+  await applyPassiveToolProvider(context, { serverName: 'passive-beta', conforming: true, counter: { value: 0 } })
+
+  const first = context.createAgent('universal-first')
+  const second = context.createAgent('universal-second')
+  context.emit('agent/created', { agent: first })
+  context.emit('agent/created', { agent: second })
+
+  assert.deepEqual(context.visibleNames(first), [routerToolName])
+  assert.deepEqual(context.visibleNames(second), [routerToolName])
+  await assert.rejects(
+    call(context, 'mcp__passive-alpha__echo', { text: 'must-stay-hidden' }, first),
+    /missing registered tool: mcp__passive-alpha__echo/
+  )
+
+  const routed = await call(context, routerToolName, {
+    query: 'passive alpha echo',
+    serverName: 'passive-alpha'
+  }, first)
+  assert.match(routed.content[0].text, /passive-alpha/)
+  assert.deepEqual(context.visibleNames(first), [
+    'mcp__passive-alpha__counter',
+    'mcp__passive-alpha__echo',
+    routerToolName
+  ])
+  assert.deepEqual(context.visibleNames(second), [routerToolName])
+
+  const echo = await call(context, 'mcp__passive-alpha__echo', { text: 'passive-host-ok' }, first)
+  assert.deepEqual(echo, {
+    content: [{ type: 'text', text: 'passive-host-ok' }],
+    structuredContent: { provider: 'passive-alpha', rawName: 'echo', count: 1 }
+  })
+
+  context.emit('agent/turn-stopping', { agent: first })
+  assert.deepEqual(context.visibleNames(first), [routerToolName])
+  context.cleanup()
+  assert.equal(context.definitions.size, 0)
+  assert.equal(context.handlerCount(), 0)
 }
 
 async function fullLifecycle() {
@@ -488,6 +578,7 @@ try {
   await setupFailuresRollBackAcquiredResources()
   await fullLifecycle()
   configurationDefaults()
+  await universalManagerLifecycle()
   await demandDisappearsDuringReconnect()
   await sharedRouterCleanupOrder()
   await routerNameCollisionHandsOwnershipBack()

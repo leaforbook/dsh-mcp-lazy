@@ -1,4 +1,5 @@
 - insert:
-    - id: mcp-lazy
+    - id: mcp-lazy-manager
       name: '@yilinxiao/dsh-mcp-lazy'
-      disabled: true
+      config:
+        mode: manager
