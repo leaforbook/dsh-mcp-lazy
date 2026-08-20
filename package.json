@@ -1,6 +1,6 @@
 {
   "name": "@yilinxiao/dsh-mcp-lazy",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "MCP lazy-loading, dynamic tool-loading, and Tool Router plugin for DeepSeek Harness with fail-open schema progressive disclosure: hide compatible MCP tool schemas until routed to reduce context bloat and save tokens, while explicit lazy connections stay warm. · DSH 的 MCP懒加载、动态加载工具与 Tool Router 插件：按需披露兼容 MCP Schema，减少工具过多造成的上下文膨胀和 Token 浪费；不兼容时保持直通，显式懒加载连接继续保温。",
   "type": "module",
   "main": "lib/index.js",

@@ -1,48 +1,25 @@
-# @yilinxiao/dsh-mcp-lazy 0.5.0
+# DSH MCP Lazy（@yilinxiao/dsh-mcp-lazy）
 
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的 MCP懒加载、动态加载工具与 Tool Router 插件：解决同时配置多个 MCP 服务器时 MCP工具过多、工具 Schema 常驻、工具目录过长造成的上下文膨胀和 Token 浪费。0.5.0 安装后会自动发现并接管通过**兼容性准入**的 DSH MCP：在受管理 MCP 的工具面中，冷启动时模型默认只看到一个共享路由 `mcp__router__search_and_activate`；路由选中服务器后，才向当前会话做 **Schema 按需披露**。下一轮会重新隐藏，减少 Token 占用；普通 DSH 工具和无法确认兼容的 MCP 保持原样。
+这是一个给 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/deepseek-harness) 使用的插件。
 
-对于显式配置到本插件的 MCP，仍支持按需连接、轮末卸载闲置 Schema、连接保温、工具目录分页刷新、有限自动重连，以及 stdio 和 Streamable HTTP 传输。短时间内再次使用可以直接复用连接。
+一句话说明它的用途：**MCP 装得越多，模型每轮都要读取的工具说明就越多；这个插件会先把暂时用不到的工具说明藏起来，需要时再加载，从而减少 Token 消耗。**
 
-这是 schema progressive disclosure（模型侧工具 Schema 的渐进披露），不是对第三方 MCP 进程的强制代理。对显式配置到本插件的服务器，仍提供完整的**连接层懒加载**（按需连接、轮末卸载 Schema、可保温复用连接）；其他兼容 DSH MCP 的连接、重试、附件和执行逻辑始终由原插件负责。
+当前版本：`0.5.1`
 
-## 自动接管的边界
+## 它解决了什么问题
 
-| MCP 类型 | Schema 行为 | 连接行为 | 失败行为 |
-| --- | --- | --- | --- |
-| 显式 `dsh-mcp-lazy` server | router 选择后仅向当前会话披露 | 按需启动并保温 | 保留原 lazy 错误并恢复隐藏状态 |
-| 通过兼容性准入的其他 DSH MCP | router 选择后仅向当前会话披露 | 原插件保持所有权 | fail-open，恢复原工具面 |
-| 不兼容或无法确认的 MCP | 完全不接管 | 完全不接管 | 完全保持 DSH 原样 |
+假设你在 DSH 里装了文件、浏览器、数据库等多个 MCP。即使当前问题只需要文件工具，所有 MCP 的工具名称、说明和参数也可能一起进入模型上下文，白白占用 Token。
 
-兼容性准入要求服务器的全部公开工具稳定匹配 `mcp__<serverName>__<toolName>`，能在 DSH 全局工具表中无歧义解析，并能被按会话原子隐藏和再次披露。**不兼容的 MCP 保持原样**：命名异常、冲突、目录不完整、DSH 能力不足或任一运行时不确定性都不会被强行接管。
+安装本插件后：
 
-这里的原则是 **fail-open**：无法证明“已隐藏的服务器一定可被路由和披露”时，就放弃该服务器的 Token 节省，恢复它原有的工具可见性和执行方式；不会为了省 Token 让工具消失或不可用。
+1. 新会话开始时，兼容 MCP 的大量工具不会全部出现。在这些被接管的 MCP 工具中，模型只会看到一个路由工具：`mcp__router__search_and_activate`。
+2. 当任务需要某个 MCP 时，路由工具会找到它，并只向当前会话显示这个 MCP 的工具。
+3. 当前轮结束后，这些工具会再次隐藏，下一轮不用重复携带。
+4. 其他会话不会继承本会话已经加载的工具。
 
-## Token 节省如何理解
+这个过程叫做 **Schema 按需披露**。这里的 Schema 可以简单理解为“模型调用工具前必须阅读的工具说明书”。
 
-工具的名称、说明和参数结构会随模型请求进入上下文。兼容 MCP 越多、工具 Schema 越大，冷启动时只保留一个路由工具的收益通常越明显；路由后披露的目标服务器仍会在随后的模型步骤占用其完整 Schema。这不是整次请求或账单的固定百分比，真实收益应从同类请求的 `prompt_tokens`、缓存命中和未命中数据中比较。
-
-0.4.0 的显式 lazy 模式曾对三个真实 MCP 做过统一的 `cl100k_base` 测量：
-
-| MCP 服务器 | 全量常驻 | 显式 lazy 冷态 | 全量工具定义 | 冷态工具定义 | 每轮减少 | 工具定义降幅 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Chrome DevTools MCP 1.7.0 | 29 个工具 | 2 个控制工具 | 4,585 Token | 200 Token | 4,385 Token | 95.6% |
-| Playwright MCP 0.0.79 | 24 个工具 | 2 个控制工具 | 3,452 Token | 195 Token | 3,257 Token | 94.4% |
-| Filesystem MCP 2026.7.10 | 14 个工具 | 2 个控制工具 | 1,694 Token | 190 Token | 1,504 Token | 88.8% |
-| 三个服务器合计 | 67 个工具 | 6 个控制工具 | 9,727 Token | 581 Token | 9,146 Token | 94.0% |
-
-0.5.0 另用集成宿主中的两个 passive MCP 和一个 managed MCP 做了冷态对比。关闭 universal manager 时，实际冷态目录包含共享 router、四个 passive 工具以及 managed MCP 的两个控制工具，共 7 个 Schema；启用 universal manager 后只剩共享 router。对同一批 `{name, description, parameters}` 规范化 JSON 使用 `cl100k_base` 编码，结果为 **404 → 63 Token**，减少 **341 Token（84.4%）**。这个小型 fixture 的工具描述很短，真实大型 MCP 的绝对节省通常更高。
-
-上面的比例只表示工具定义缩小了多少，不能当成整次请求的固定 Token 降幅。以三个真实 MCP 的 0.4.0 数据为例，若工具定义之外的输入为 `C`，整次输入的理论降幅约为 `9,146 ÷ (C + 9,727)`：
-
-| 其他上下文 `C` | 全量常驻总输入 | 显式 lazy 冷态总输入 | 约减少 | 整次输入降幅 |
-| ---: | ---: | ---: | ---: | ---: |
-| 0 Token | 9,727 Token | 581 Token | 9,146 Token | 94.0% |
-| 10,000 Token | 19,727 Token | 10,581 Token | 9,146 Token | 46.4% |
-| 50,000 Token | 59,727 Token | 50,581 Token | 9,146 Token | 15.3% |
-| 100,000 Token | 109,727 Token | 100,581 Token | 9,146 Token | 8.3% |
-
-`cl100k_base` 仅用于一致地比较 Schema 文本，不等同于 DeepSeek 的精确计费 Token。核算真实收益时应比较同类请求返回的 `prompt_tokens`、缓存命中和未命中数据。
+普通 DSH 工具不会被隐藏。不符合要求、无法安全接管的 MCP 也会保持原样，因此不会为了节省 Token 影响工具使用。
 
 ## 安装
 
@@ -50,9 +27,21 @@
 dsh plugin --profile web add @yilinxiao/dsh-mcp-lazy
 ```
 
-推荐通过 npm 安装；源码与发布记录仍保存在 [GitHub](https://github.com/leaforbook/dsh-mcp-lazy)。
+安装后重启 DSH 即可。插件会自动发现已经安装的兼容 MCP，不需要逐个填写 MCP 地址、请求头或密钥。
 
-安装包自带的 `cordis.patch.yml` 会启用唯一的 `mcp-lazy-manager`：
+源码和版本记录在 [GitHub](https://github.com/leaforbook/dsh-mcp-lazy)。
+
+## 装完以后怎么用
+
+正常向模型提问即可，不需要手动操作插件。
+
+例如你可以说：
+
+> 帮我找出项目里所有超过 10 MB 的 PDF 文件。
+
+模型会先通过共享路由找到文件 MCP，再调用它的原生工具。插件只负责决定“什么时候让模型看到哪些工具”，真正的工具调用仍由原 MCP 完成。
+
+安装包会自动加入下面这条 manager 配置：
 
 ```yaml
 - insert:
@@ -62,22 +51,78 @@ dsh plugin --profile web add @yilinxiao/dsh-mcp-lazy
         mode: manager
 ```
 
-它不需要任何 MCP URL、headers 或凭据。安装完成并重启 DSH 后，已安装的兼容 DSH MCP 会自动进入统一路由；不需要把它们逐个复制到本插件配置中。下面的显式 server 配置仅在你希望本插件自己拥有某个 MCP 的连接层懒加载时使用。
+通常不需要手动修改它。
 
-### 关闭自动接管
+## 能节省多少 Token
 
-要恢复所有 MCP 的原有 schema 可见性，只禁用 manager 条目即可；显式 lazy server 配置不会受影响。在 `$DSH_HOME/profiles/web/cordis.patch.yml` 增加 profile 覆盖：
+节省量取决于你装了多少 MCP，以及它们的工具说明有多长。MCP 越多、工具越复杂，效果通常越明显。
+
+0.4.0 的显式懒加载模式曾对三个常见 MCP 的工具说明做过统一测量：
+
+| MCP | 原来常驻的工具 | 使用插件后的冷态工具 | 工具说明 Token 减少 |
+| --- | ---: | ---: | ---: |
+| Chrome DevTools MCP 1.7.0 | 29 个 | 2 个控制工具 | 4,585 → 200，减少 95.6% |
+| Playwright MCP 0.0.79 | 24 个 | 2 个控制工具 | 3,452 → 195，减少 94.4% |
+| Filesystem MCP 2026.7.10 | 14 个 | 2 个控制工具 | 1,694 → 190，减少 88.8% |
+| 合计 | 67 个 | 6 个控制工具 | 9,727 → 581，减少 94.0% |
+
+0.5.0 的自动接管测试中，冷态工具说明从 404 Token 降到 63 Token，减少了 84.4%。测试里的工具说明较短，大型 MCP 通常能省下更多绝对 Token。
+
+这里的百分比只表示“工具说明”缩小了多少，不代表整次请求或账单一定下降同样的比例。聊天记录、系统提示和用户输入仍会占用 Token。
+
+<details>
+<summary>查看完整的 Token 计算示例</summary>
+
+以上面三个 MCP 为例，工具说明每轮少了约 9,146 Token。如果请求中还有其他上下文，整次输入大约会变成：
+
+| 其他上下文 | 原总输入 | 使用插件后 | 约减少 | 整次输入降幅 |
+| ---: | ---: | ---: | ---: | ---: |
+| 0 Token | 9,727 | 581 | 9,146 | 94.0% |
+| 10,000 Token | 19,727 | 10,581 | 9,146 | 46.4% |
+| 50,000 Token | 59,727 | 50,581 | 9,146 | 15.3% |
+| 100,000 Token | 109,727 | 100,581 | 9,146 | 8.3% |
+
+这些数据使用 `cl100k_base` 对相同格式的工具说明进行比较，只适合观察前后差异，不等同于 DeepSeek 的精确计费 Token。要核算实际收益，请比较同类请求的 `prompt_tokens` 和缓存命中数据。
+
+</details>
+
+## 哪些 MCP 会被自动接管
+
+插件会先做一次**兼容性准入**检查。只有工具名称清楚、没有冲突，而且能够安全隐藏和重新显示的 MCP，才会被接管。
+
+| MCP 类型 | 插件会怎么处理 | MCP 连接由谁管理 |
+| --- | --- | --- |
+| 显式 `dsh-mcp-lazy` server | 需要时显示工具，并按需建立连接 | 本插件 |
+| 通过兼容性准入的其他 DSH MCP | 需要时显示原 MCP 已注册的工具 | 原 MCP 插件 |
+| 不兼容或无法确认的 MCP | 完全不接管，工具照常可见 | 原 MCP 插件 |
+
+**不兼容的 MCP 保持原样。** 出现命名异常、工具重名、目录不完整或 DSH 能力不足等情况时，插件会主动放弃接管。
+
+技术上，这种处理方式叫 **fail-open**：只要无法确定接管是安全的，就优先保证工具可用，不强求节省 Token。
+
+## 关闭自动接管
+
+如果你想让所有 MCP 恢复原来的显示方式，只禁用 manager 条目即可。在 `$DSH_HOME/profiles/web/cordis.patch.yml` 中加入：
 
 ```yaml
 - id: mcp-lazy-manager
   disabled: true
 ```
 
-该覆盖只会禁用 bundle 自动插入的 manager；同一 profile 中的显式 `dsh-mcp-lazy` server 条目仍可继续提供连接层懒加载。请保留该覆盖：删除它会让包内 bundle 再次启用 `mcp-lazy-manager`。无需卸载本 npm 包，也不要修改第三方 MCP 的配置、URL 或凭据。
+请保留这段覆盖配置；删掉后，安装包会再次启用 manager。
 
-## 配置
+它只关闭自动接管，显式 lazy server 配置不会受影响。你不需要卸载 npm 包，也不用修改其他 MCP 的地址、请求头或密钥。
 
-在对应配置目录的 `cordis.patch.yml` 中，可为需要**连接层懒加载**的 MCP 服务器另写一条显式配置：
+## 需要连 MCP 时才启动它
+
+自动接管主要减少模型看到的工具说明，不会关闭第三方 MCP 进程。
+
+如果你还希望某个 MCP 平时不连接、用到时才启动，可以把它显式配置为本插件的 server。这称为**连接层懒加载**。
+
+<details>
+<summary>查看 stdio 和 HTTP 配置示例</summary>
+
+在对应配置目录的 `cordis.patch.yml` 中加入：
 
 ```yaml
 - insert:
@@ -88,14 +133,14 @@ dsh plugin --profile web add @yilinxiao/dsh-mcp-lazy
         serverName: filesystem
         command: npx
         args: [-y, '@modelcontextprotocol/server-filesystem', '/tmp']
-        connectTimeoutMs: 30000      # 建立连接超时，默认 30 秒
-        discoveryTimeoutMs: 60000    # 每页 tools/list 超时，默认 60 秒
-        maxToolListPages: 100        # 最多读取的工具目录页数，默认 100
-        reconnectAttempts: 1         # 意外断开后的有限重连次数，默认 1
-        autoActivate: false          # 是否在启动时直接连接，默认 false
-        releaseOnTurnEnd: true       # 是否在轮次结束后卸载远端工具 Schema，默认 true
-        warmIdleMs: 300000           # Schema 卸载后连接保温时长，默认 5 分钟
-        routingHints: [文件, 目录]    # 供共享路由器匹配的提示词，默认 []
+        connectTimeoutMs: 30000
+        discoveryTimeoutMs: 60000
+        maxToolListPages: 100
+        reconnectAttempts: 1
+        autoActivate: false
+        releaseOnTurnEnd: true
+        warmIdleMs: 300000
+        routingHints: [文件, 目录]
 
     - id: mcp-lazy
       name: '@yilinxiao/dsh-mcp-lazy'
@@ -108,51 +153,63 @@ dsh plugin --profile web add @yilinxiao/dsh-mcp-lazy
         routingHints: [远程接口, API]
 ```
 
-### 配置项
+</details>
 
-| 配置键 | 类型 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `transport` | `stdio` \| `streamable-http` | — | 必填。MCP 传输方式。 |
-| `serverName` | string | — | 必填。允许 `[A-Za-z0-9_-]{1,32}`，同时用作工具名前缀。 |
-| `command` / `args` / `env` / `cwd` | — | — | `stdio` 启动参数。`env` 会合并到脱敏后的父进程环境。 |
-| `url` / `headers` | — | — | `streamable-http` 的服务地址和请求头。 |
-| `toolCallTimeoutMs` | number | `60000` | 单次工具调用超时，单位为毫秒。 |
-| `connectTimeoutMs` | number | `30000` | 建立 MCP 连接的超时，单位为毫秒。 |
-| `discoveryTimeoutMs` | number | `60000` | 单页 `tools/list` 请求的超时，单位为毫秒；激活流程另有略短于 180 秒控制工具超时的总 deadline。 |
-| `maxToolListPages` | number | `100` | 一次目录发现最多读取的页数；重复游标、重名工具或超限都会中止。 |
-| `reconnectAttempts` | number | `1` | 意外断开且仍有当前轮使用者、跨轮次持有者或自动激活所有权时的重连次数。设为 `0` 可关闭；成功调用工具后恢复预算。 |
-| `autoActivate` | boolean | `false` | 启动时直接连接服务器。开启后不再按需加载。 |
-| `releaseOnTurnEnd` | boolean | `true` | 本轮结束且没有会话继续使用时，立即卸载远端工具 Schema。设为 `false` 时，实际激活或调用过服务器的会话会跨轮次持有发布；无关会话的销毁不会释放它，最后一个真实持有会话销毁后才卸载。 |
-| `warmIdleMs` | number | `300000` | Schema 卸载后的连接保温时长，单位为毫秒。仅接受非负整数，无效值回退为 5 分钟；设为 `0` 可恢复 0.3.x 的轮末立即关闭连接行为。 |
-| `routingHints` | string[] | `[]` | 共享路由器用于匹配服务器的关键词，例如业务名称、能力或自然语言别名。 |
+### 显式 server 配置说明
 
-## 工作原理
+| 配置项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `transport` | 无 | 必填。使用 `stdio` 或 `streamable-http`。 |
+| `serverName` | 无 | 必填。服务器简称，只能使用字母、数字、下划线和短横线，最长 32 个字符。 |
+| `command` / `args` / `env` / `cwd` | 无 | `stdio` 模式下的启动命令、参数、环境变量和工作目录。 |
+| `url` / `headers` | 无 | HTTP 模式下的服务地址和请求头。 |
+| `toolCallTimeoutMs` | `60000` | 一次工具调用最多等待多少毫秒。 |
+| `connectTimeoutMs` | `30000` | 建立连接最多等待多少毫秒。 |
+| `discoveryTimeoutMs` | `60000` | 读取一页工具目录最多等待多少毫秒。 |
+| `maxToolListPages` | `100` | 一次最多读取多少页工具目录。 |
+| `reconnectAttempts` | `1` | 意外断开后最多自动重连几次，设为 `0` 可关闭。 |
+| `autoActivate` | `false` | 是否在 DSH 启动时立即连接。开启后不再按需连接。 |
+| `releaseOnTurnEnd` | `true` | 当前轮结束后是否隐藏已经加载的工具说明。 |
+| `warmIdleMs` | `300000` | 工具隐藏后继续保留连接多久，默认 5 分钟；设为 `0` 会立即断开。 |
+| `routingHints` | `[]` | 帮助路由器识别这个 MCP 的关键词，如业务名、能力或常用叫法。 |
 
-1. manager 监听 DSH 的全局工具目录。通过兼容性准入的 `mcp__<server>__<tool>` 命名空间会被完整、原子地加入目录；普通工具、共享 router 名称、冲突名称和无法稳定解析的 MCP 都是 passthrough。
-2. 每个 agent 有独立 deny mask。冷态屏蔽所有已准入 MCP 的 schema，仅保留 `mcp__router__search_and_activate`；路由器选择一个服务器后，只从该 agent 的 deny mask 中移除该服务器。其他 agent 和其他 MCP 始终保持隐藏。
-3. `agent/turn-stopping` 会清除本轮选择并恢复完整 deny mask，`agent/disposed` 会清理该 agent 的 restriction。注册表变更、restriction 失败或目录验证失败时立即 fail-open，而不是留下半隐藏状态。
-4. 对显式 `dsh-mcp-lazy` server，路由器会按既有规则参考精确 `serverName`、完整工具前缀、`routingHints` 和缓存目录；匹配成功时再以 `stdio` 或 `streamable-http` 建连、发现并发布原生工具。`releaseOnTurnEnd: true` 时轮末卸载 Schema，`warmIdleMs` 内重用连接；`releaseOnTurnEnd: false` 和 `autoActivate` 保留现有持有语义。
-5. 对被动接管的第三方 DSH MCP，router 只披露已由原插件注册的同一份 ToolDefinition，绝不包装或替换执行器。因此 structured content、图片/附件、权限、审计、重试、重连与进程生命周期仍归原插件所有。
+连接保温的作用是：本轮结束后先隐藏工具说明，但暂时不断开 MCP。短时间内再次使用时，可以直接复用连接，减少等待。
 
-## 验证自动接管
+## 怎么确认插件已经生效
 
-1. 安装后重启 DSH，创建一个新的会话；在受管理 MCP 子集的冷态工具目录中应只呈现 `mcp__router__search_and_activate`，而已通过兼容性准入的 MCP 不会在模型请求中常驻。普通 DSH 工具保持可见。
-2. 让模型调用 router 并选择一个兼容服务器；下一步只会披露该服务器的工具，调用仍由原 MCP 执行。
-3. 结束该轮或新开会话，已披露工具应再次隐藏；另一会话不应继承前一会话的披露。
-4. 如发现某个 MCP 始终可见，先检查其公开名称、重复名称和 DSH 日志。这通常表示它未通过兼容性准入，属于预期的 passthrough，而不是功能失效。
+1. 安装并重启 DSH。
+2. 新建一个会话。
+3. 在冷态工具列表中，已经被接管的 MCP 工具应该隐藏，只留下共享路由 `mcp__router__search_and_activate`；普通 DSH 工具仍然可见。
+4. 提出一个需要某个 MCP 的任务。路由完成后，模型应该只看到这个 MCP 的工具，并能正常调用。
+5. 新建另一个会话。前一个会话加载过的 MCP 工具不应出现在新会话中。
+
+如果某个 MCP 一直可见，通常说明它没有通过兼容性检查，因此被保留为原来的工作方式。这不代表插件失效。
 
 ## 兼容性
 
-Universal manager 通过能力检测而不是版本字符串强制启用；缺少 `tools.schemas`、`tools.get` 或 agent scoped `tools.restrict` 时不会安装任何全局限制。CI 已对 DSH `0.1.0-rc.6、0.1.0-rc.7 和 0.1.0-rc.8` 执行插件导入、manager 生命周期和显式 lazy server 共存验证。升级 DSH 大版本后，建议先运行本仓库的兼容测试再在生产 profile 启用。
+已经测试的 DSH 版本：`0.1.0-rc.6、0.1.0-rc.7 和 0.1.0-rc.8`。
 
-## 限制
+插件实际通过 DSH 是否提供所需能力来决定能否启用，而不是只看版本号。如果缺少工具目录读取、工具查询或按会话隐藏工具等能力，插件不会施加全局限制。
 
-- 自动接管只优化模型侧 schema；它不会也不应停止、重启或代理不透明第三方 MCP 进程。需要按需启动连接时，请使用上面的显式 `dsh-mcp-lazy` server 配置。
-- 一个 MCP 只有在完整命名空间都可无歧义路由、隐藏和再次披露时才会被接管。不能证明安全性的服务器会保持可见，这是 fail-open 的设计结果。
-- 不支持必须以任务方式执行的工具，即 `tool.execution.taskSupport === 'required'`。遇到这类工具会直接返回错误。
-- 自动重连是有界的，且只在仍有连接需求时发生。超过预算后需重新调用 `activate`；成功调用任一服务器工具会恢复重连预算。
-- 保温只复用当前进程内的连接和工具目录，不写磁盘；进程重启后仍需重新发现。
-- TOKEN 数据是工具定义的近似值，不代表请求的全部输入，也不能直接换算成账单金额。
+DSH 升级大版本后，建议先运行本仓库的兼容测试，再用于重要环境。
+
+## 使用限制
+
+- 自动接管只减少模型侧的工具说明，不负责停止、重启或代理第三方 MCP 进程。
+- 只有能够被准确识别、安全隐藏并重新显示的完整 MCP，才会被接管。
+- 不支持 `tool.execution.taskSupport === 'required'` 的任务型工具，调用时会直接返回错误。
+- 自动重连次数有限。超过次数后，需要重新调用 `activate`。
+- 保温连接只存在于当前 DSH 进程中，不会写入磁盘。DSH 重启后需要重新读取工具目录。
+- Token 数据是工具说明的近似测量，不能直接换算为账单金额。
+
+## 给开发者的工作原理
+
+1. manager 监听 DSH 的工具目录，只接管能够完整识别的 `mcp__<server>__<tool>` 工具组。普通工具、重名工具和无法确认来源的 MCP 直接放行。
+2. 每个会话都有独立的隐藏列表。路由器选中一个 MCP 后，只在当前会话中显示它的工具。
+3. 当前轮结束或会话关闭时，插件会恢复隐藏状态并清理会话数据。
+4. 目录发生变化或隐藏操作失败时，插件会执行 fail-open，恢复原工具的可见性。
+5. 对第三方 MCP，插件只显示原 MCP 注册的工具定义，不替换执行器。因此图片、附件、权限、审计、重试和进程生命周期仍由原插件负责。
+6. 对显式配置的 server，插件还负责连接层懒加载、工具目录分页、有限重连和连接保温，支持 `stdio` 与 `streamable-http`。
 
 ## 测试
 
@@ -161,7 +218,7 @@ npm ci --legacy-peer-deps --ignore-scripts
 npm test
 ```
 
-测试覆盖兼容性准入、agent 隔离、动态目录、restriction fail-open、被动 MCP 原执行器保留、显式 lazy 生命周期，以及真实 stdio MCP 客户端/服务端的分页、调用和目录变更通知。CI 还覆盖 DSH rc.6、rc.7、rc.8 的宿主依赖图。
+测试覆盖自动接管、会话隔离、动态工具目录、安全放行、原 MCP 执行器保留、显式 server 生命周期，以及真实 stdio MCP 的分页、调用和目录变化通知。CI 还会测试 DSH rc.6、rc.7 和 rc.8。
 
 ## 许可证
 

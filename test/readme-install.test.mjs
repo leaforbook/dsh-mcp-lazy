@@ -19,7 +19,7 @@ test('bundle enables exactly one universal manager entry', () => {
 
 test('README explains universal takeover boundaries and safe opt-out', () => {
   for (const text of [
-    '0.5.0',
+    '0.5.1',
     'mode: manager',
     'mcp-lazy-manager',
     '兼容性准入',
