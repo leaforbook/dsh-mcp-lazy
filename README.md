@@ -22,7 +22,27 @@
 
 工具的名称、说明和参数结构会随模型请求进入上下文。兼容 MCP 越多、工具 Schema 越大，冷启动时只保留一个路由工具的收益通常越明显；路由后披露的目标服务器仍会在随后的模型步骤占用其完整 Schema。这不是整次请求或账单的固定百分比，真实收益应从同类请求的 `prompt_tokens`、缓存命中和未命中数据中比较。
 
-0.4.0 曾在三个真实 MCP 上测得：67 个常驻工具定义约为 9,727 `cl100k_base` Token；旧的显式 lazy 冷态为 6 个控制工具、约 581 Token。0.5.0 的默认冷态改为统一路由和兼容 Schema 接管，不能直接沿用该旧比例；请在自己的 DSH profile 按下面的验证方法测量。
+0.4.0 的显式 lazy 模式曾对三个真实 MCP 做过统一的 `cl100k_base` 测量：
+
+| MCP 服务器 | 全量常驻 | 显式 lazy 冷态 | 全量工具定义 | 冷态工具定义 | 每轮减少 | 工具定义降幅 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Chrome DevTools MCP 1.7.0 | 29 个工具 | 2 个控制工具 | 4,585 Token | 200 Token | 4,385 Token | 95.6% |
+| Playwright MCP 0.0.79 | 24 个工具 | 2 个控制工具 | 3,452 Token | 195 Token | 3,257 Token | 94.4% |
+| Filesystem MCP 2026.7.10 | 14 个工具 | 2 个控制工具 | 1,694 Token | 190 Token | 1,504 Token | 88.8% |
+| 三个服务器合计 | 67 个工具 | 6 个控制工具 | 9,727 Token | 581 Token | 9,146 Token | 94.0% |
+
+0.5.0 另用集成宿主中的两个 passive MCP 和一个 managed MCP 做了冷态对比。关闭 universal manager 时，实际冷态目录包含共享 router、四个 passive 工具以及 managed MCP 的两个控制工具，共 7 个 Schema；启用 universal manager 后只剩共享 router。对同一批 `{name, description, parameters}` 规范化 JSON 使用 `cl100k_base` 编码，结果为 **404 → 63 Token**，减少 **341 Token（84.4%）**。这个小型 fixture 的工具描述很短，真实大型 MCP 的绝对节省通常更高。
+
+上面的比例只表示工具定义缩小了多少，不能当成整次请求的固定 Token 降幅。以三个真实 MCP 的 0.4.0 数据为例，若工具定义之外的输入为 `C`，整次输入的理论降幅约为 `9,146 ÷ (C + 9,727)`：
+
+| 其他上下文 `C` | 全量常驻总输入 | 显式 lazy 冷态总输入 | 约减少 | 整次输入降幅 |
+| ---: | ---: | ---: | ---: | ---: |
+| 0 Token | 9,727 Token | 581 Token | 9,146 Token | 94.0% |
+| 10,000 Token | 19,727 Token | 10,581 Token | 9,146 Token | 46.4% |
+| 50,000 Token | 59,727 Token | 50,581 Token | 9,146 Token | 15.3% |
+| 100,000 Token | 109,727 Token | 100,581 Token | 9,146 Token | 8.3% |
+
+`cl100k_base` 仅用于一致地比较 Schema 文本，不等同于 DeepSeek 的精确计费 Token。核算真实收益时应比较同类请求返回的 `prompt_tokens`、缓存命中和未命中数据。
 
 ## 安装
 

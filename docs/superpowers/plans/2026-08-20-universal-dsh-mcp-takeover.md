@@ -780,7 +780,17 @@ Fresh Chrome tab `147468613` completed two chronological conversation flows unde
 3. The second conversation's later prose contradicted its initial catalog observation. Adjudication follows the actual chronological catalog and tool rows: the second conversation started cold and required an independent router activation, proving per-conversation isolation and reset.
 4. Console warn/error entries on the successful tab were exactly `[]`.
 
-The compatible fixture defines two real schemas. Cold state disclosed zero of those two schemas and one shared router; routed state disclosed exactly the target provider's two schemas. The deliberately nonconforming fixture stayed directly visible and executable. DSH exposes no raw prompt-token count here, so this evidence records the schema reduction without inventing a numeric token saving.
+The compatible fixture defines two real schemas. Cold state disclosed zero of those two schemas and one shared router; routed state disclosed exactly the target provider's two schemas. The deliberately nonconforming fixture stayed directly visible and executable.
+
+The required repeatable schema-token comparison used the integration host's two passive MCP servers (`passive-alpha` and `passive-beta`) plus the existing `managed-fixture`. With universal mode disabled, its cold tool surface contains the shared router, four passive tools, and two managed control tools: 7 schemas. Universal cold mode contains only the shared router: 1 schema. Serializing the exact DSH `{name, description, parameters}` projections as key-sorted compact JSON and encoding both with `tiktoken` `cl100k_base` produced:
+
+```text
+baseline:       7 schemas, 404 tokens, 1645 UTF-8 bytes
+universal cold: 1 schema,   63 tokens,  259 UTF-8 bytes
+reduction:                 341 tokens (84.4%)
+```
+
+This measures schema text only and is not presented as a DeepSeek billing-token count. The fixture schemas are deliberately small; the README retains the separate 67-tool real-MCP benchmark for practical scale.
 
 DSH's tool row and Inspect/Event details expose only the fixture's rendered text because `output.render` returns `value.content`; they do not expose `structuredContent`. Chrome evidence therefore does not invent visible `provider`, `rawName`, or counter fields. Exact native executor invocation is established by the tool rows above, while rich/structured result ownership is covered by the source and automated lifecycle tests. This is a UI observability boundary, not an execution failure.
 
