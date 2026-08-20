@@ -677,11 +677,11 @@ rtk git commit -m "docs: explain universal MCP compatibility takeover"
 - Consumes: local DSH Web profile at `http://127.0.0.1:3080/` and its exact pre-test configuration backup.
 - Produces: real browser and API evidence without leaving fixture entries or altered user configuration.
 
-- [ ] **Step 1: Record and back up exact local state**
+- [x] **Step 1: Record and back up exact local state**
 
 Record SHA-256 hashes of `~/.dsh/cordis.patch.yml`, the Web profile `package.json`, and lockfile. Copy them to a fresh `mktemp -d` directory. Record the formal DSH service label, PID, run count, root HTTP status, and API status before mutation.
 
-- [ ] **Step 2: Build a local tarball and install it only in the Web profile**
+- [x] **Step 2: Build a local tarball and install it only in the Web profile**
 
 Run `rtk npm pack` in the repository. Install the resulting `yilinxiao-dsh-mcp-lazy-0.5.0.tgz` into the Web profile without publishing to npm. Add two temporary fixtures to the backed-up user patch:
 
@@ -706,11 +706,11 @@ Use these exact temporary entries:
         serverName: task8-nonconforming
 ```
 
-- [ ] **Step 3: Restart once and verify service stability**
+- [x] **Step 3: Restart once and verify service stability**
 
 Restart the formal DSH service once. Poll for 30 seconds and require one stable PID/run count, HTTP 200 for root/API on every poll, no watchdog/one-shot restart jobs, and no new fatal log segment.
 
-- [ ] **Step 4: Verify behavior in a real browser conversation**
+- [x] **Step 4: Verify behavior in a real browser conversation**
 
 Using the existing Chrome session and DSH model:
 
@@ -723,11 +723,11 @@ Using the existing Chrome session and DSH model:
 - finish the first turn and confirm its passive schemas are hidden again;
 - inspect browser console and require zero new error/warn messages attributable to the plugin.
 
-- [ ] **Step 5: Restore exact configuration and verify cleanup**
+- [x] **Step 5: Restore exact configuration and verify cleanup**
 
 Restore all backed-up profile/user files byte-for-byte, remove only the temporary fixture state and local tarball installation artifacts, restart the formal service once, and verify original hashes, no fixture markers, no backup files in profile directories, one stable PID for 30 seconds, root/API HTTP 200, and a clean browser console.
 
-- [ ] **Step 6: Run final source verification after restoration**
+- [x] **Step 6: Run final source verification after restoration**
 
 Run:
 
@@ -740,7 +740,7 @@ rtk git status --short
 
 Expected: zero test failures, successful pack dry-run, no whitespace errors, and only the pre-existing untracked `node` and `npm` files plus the intentionally modified acceptance-evidence plan before it is committed.
 
-- [ ] **Step 7: Append acceptance evidence and commit**
+- [x] **Step 7: Append acceptance evidence and commit**
 
 Append exact test counts, DSH health observations, Chrome tool-call evidence, passthrough evidence, token/schema comparison, cleanup hashes, and any expected skips. Then run `git diff --check` and commit:
 
@@ -753,12 +753,56 @@ rtk git commit -m "test: record universal MCP browser acceptance"
 
 ## Final Review Checklist
 
-- [ ] Every acceptance criterion in the spec maps to at least one automated or browser test above.
-- [ ] No production change was made before its focused test failed for the expected missing behavior.
-- [ ] Nonconforming and uncertain MCP fixtures remain visible and executable.
-- [ ] Every manager error path is fail-open.
-- [ ] Passive rich/structured execution remains owned by the original definition.
-- [ ] Managed lazy warm-idle and reconnect regressions remain green.
-- [ ] Node/DSH compatibility matrix, full local suite, package dry-run, DSH service stability, and Chrome acceptance all have fresh evidence.
-- [ ] Local DSH configuration is restored exactly and no restart watchdog or fixture remains.
-- [ ] Source tree stages neither the pre-existing `node` nor `npm` untracked files.
+- [x] Every acceptance criterion in the spec maps to at least one automated or browser test above.
+- [x] No production change was made before its focused test failed for the expected missing behavior.
+- [x] Nonconforming and uncertain MCP fixtures remain visible and executable.
+- [x] Every manager error path is fail-open.
+- [x] Passive rich/structured execution remains owned by the original definition.
+- [x] Managed lazy warm-idle and reconnect regressions remain green.
+- [x] Node/DSH compatibility matrix, full local suite, package dry-run, DSH service stability, and Chrome acceptance all have fresh evidence.
+- [x] Local DSH configuration is restored exactly and no restart watchdog or fixture remains.
+- [x] Source tree stages neither the pre-existing `node` nor `npm` untracked files.
+
+## Acceptance Evidence
+
+### Local DSH deployment and compatibility fixture
+
+- Acceptance used the formal local DSH `rc.8` service at `http://127.0.0.1:3080/` and the approved `@yilinxiao/dsh-mcp-lazy@0.5.0` package from commit `8f513a3`.
+- The plan's main-checkout fixture URL did not exist. The installed overlay therefore used the exact existing worktree fixture URL `file:///Users/xiaoyilin/item/mine-item/dsh-mcp-lazy/.worktrees/universal-dsh-mcp-takeover/test/fixtures/passive-tool-provider.mjs`; the main checkout was not modified.
+- The first real host run found a fixture-only contract defect: Cordis rejected `ctx.tools` access because the fixture lacked injection metadata. A focused lifecycle test first failed on missing `inject`, then the fixture-only export `inject = ['tools']` made the focused test pass. No manager production code changed in that repair; commit `8f513a3` received independent review with zero findings.
+
+### Real Chrome behavior
+
+Fresh Chrome tab `147468613` completed two chronological conversation flows under `0.5.0`:
+
+1. Turn 1 cold catalog: the shared router was present, the deliberately nonconforming tool was present, and the compatible passive echo was absent. The actual router row received `task8-passive acceptance echo` and selected `task8-passive`, disclosing two tools. The following native passive echo received `task8-browser-1` and returned exactly `task8-browser-1`.
+2. A separate new conversation again began with the router and nonconforming tool present and the passive echo absent. Its directly visible nonconforming tool received `task8-browser-2-direct` and returned exactly `task8-browser-2-direct`. Its own router activation selected `task8-passive` and disclosed two tools; the native passive echo then received `task8-browser-2-routed` and returned exactly `task8-browser-2-routed`.
+3. The second conversation's later prose contradicted its initial catalog observation. Adjudication follows the actual chronological catalog and tool rows: the second conversation started cold and required an independent router activation, proving per-conversation isolation and reset.
+4. Console warn/error entries on the successful tab were exactly `[]`.
+
+The compatible fixture defines two real schemas. Cold state disclosed zero of those two schemas and one shared router; routed state disclosed exactly the target provider's two schemas. The deliberately nonconforming fixture stayed directly visible and executable. DSH exposes no raw prompt-token count here, so this evidence records the schema reduction without inventing a numeric token saving.
+
+DSH's tool row and Inspect/Event details expose only the fixture's rendered text because `output.render` returns `value.content`; they do not expose `structuredContent`. Chrome evidence therefore does not invent visible `provider`, `rawName`, or counter fields. Exact native executor invocation is established by the tool rows above, while rich/structured result ownership is covered by the source and automated lifecycle tests. This is a UI observability boundary, not an execution failure.
+
+### Client-bootstrap A/B adjudication
+
+During setup, several agent-created tabs stalled at `Loading plugins…` or lost their Web connection even though root, `/health`, `host.describe`, both WebSocket upgrades, and all 56 boot-manifest JavaScript URLs were healthy. A controlled A/B preserved DSH `rc.8`, the exact configuration, and both fixtures while changing only the installed package from `0.5.0` to the authoritative `0.4.1`. The fresh `0.4.1` tab also failed, on the built-in `@deepseek-ai/dsh-client-ui-settings-models/client.js` loader entry. This excluded the `0.5.0` manager and fixtures as the cause. After only four known stale acceptance/error tabs were closed, a fresh `0.5.0` tab completed the successful flow above.
+
+### Restoration and final verification
+
+The authoritative `0.4.1` baseline was restored byte-for-byte:
+
+```text
+8e9a3a52a6922f70cef6e0ccb7f39193c00a4b2c8d795c3fb59039ae0ca523a1  ~/.dsh/cordis.patch.yml
+5fecb19d86d16a17e263460867106800302e2b96ed276364a286213c9d26763d  ~/.dsh/profiles/web/cordis.patch.yml
+0ef9fcfdd789e92d553a87d9ea4d74b068e30a187be04be51bf3bc61317db962  ~/.dsh/profiles/web/package.json
+046d74c2f30ddf0031ab07af52225d42a8387a39fe4b4c40b288779a411ef4a6  ~/.dsh/profiles/web/pnpm-lock.yaml
+c300dcf2ebc5f02062d6591268d29d3db6fe45e0cb138f5467276fe2ba06076e  ~/.dsh/profiles/web/cordis.yml
+```
+
+- Physical installed package version is `0.4.1`; no fixture marker, Task 8 backup under `~/.dsh`, local `0.5.0` tarball, or A/B temporary directory remains.
+- After the final formal restart, wrapper PID `68364`, run count `33`, and listener PID `68824` were unchanged from 15:09:18 through 15:09:48. Root and `/health` returned HTTP 200 in all seven samples, `host.describe` returned HTTP 200 with a successful server response, and stderr grew by zero bytes.
+- Final `rtk npm test`: 109 tests, 108 passed, 0 failed, and 1 expected compatibility skip (`DSH_COMPAT_VERSION` is injected only by compatibility CI).
+- Final `rtk npm pack --dry-run` succeeded for `yilinxiao-dsh-mcp-lazy-0.5.0.tgz`; `rtk git diff --check` passed.
+
+Acceptance adjudication: **PASS**, within the explicitly documented DSH UI observability boundary.
