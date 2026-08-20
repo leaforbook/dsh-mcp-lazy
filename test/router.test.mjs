@@ -76,6 +76,15 @@ function routerEntry(serverName) {
   }
 }
 
+function eagerRouterTool(name) {
+  return {
+    name,
+    description: name,
+    parameters: { type: 'object' },
+    execute: async () => ({ content: [] })
+  }
+}
+
 test('a visibility controller publishes the router and reveals one passive server', async () => {
   const host = throwingRegistryAdapter({})
   const revealed = []
@@ -180,6 +189,53 @@ test('an unproven passive namespace colliding with a managed name is classified 
   })
   disposeManaged()
   disposeVisibility()
+})
+
+test('post-registration notification failure rolls back definition and managed provenance transactionally', () => {
+  const host = throwingRegistryAdapter({})
+  const disposeManaged = registerRouterServer(host.adapter, {
+    serverName: 'same',
+    routingHints: [],
+    getCatalog: () => [],
+    activate: async () => 'managed'
+  })
+  let rejectNotification = false
+  const passive = {
+    serverName: 'same',
+    toolNames: ['mcp__same__managed'],
+    getDefinition: name => host.definitions.get(name),
+    getCatalog: () => []
+  }
+  const disposeVisibility = registerRouterVisibility(host.adapter, {
+    getEntries: () => [passive],
+    reveal: () => 'revealed',
+    onRouterStateChange() {
+      if (rejectNotification) throw new Error('notification rejected')
+    }
+  })
+  const definition = eagerRouterTool('mcp__same__managed')
+
+  rejectNotification = true
+  assert.throws(
+    () => registerRouterCompatibleTool(host.adapter, definition),
+    /notification rejected/
+  )
+  assert.equal(host.definitions.has(definition.name), false)
+  assert.deepEqual(getRouterEntryStatus(host.adapter, passive), {
+    available: true,
+    kind: 'collision'
+  })
+
+  rejectNotification = false
+  const disposePublished = registerRouterCompatibleTool(host.adapter, definition)
+  assert.equal(typeof disposePublished, 'function')
+  assert.deepEqual(getRouterEntryStatus(host.adapter, passive), {
+    available: true,
+    kind: 'managed'
+  })
+  disposePublished()
+  disposeVisibility()
+  disposeManaged()
 })
 
 test('a passive reveal rejection rejects router execution', async () => {

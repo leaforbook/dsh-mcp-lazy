@@ -13,7 +13,12 @@ function eagerTool(name, description = name, execute = async () => ({ content: [
   return { name, description, parameters: { type: 'object' }, execute }
 }
 
-function createHost({ listenerDisposeThrowsFor, restrictionFactory, restrictionDisposeFactory } = {}) {
+function createHost({
+  getToolFactory,
+  listenerDisposeThrowsFor,
+  restrictionFactory,
+  restrictionDisposeFactory
+} = {}) {
   const definitions = new Map()
   const schemaOnly = new Map()
   const listeners = new Map()
@@ -55,6 +60,9 @@ function createHost({ listenerDisposeThrowsFor, restrictionFactory, restrictionD
       ].map(({ name, description, parameters }) => ({ name, description, parameters }))
     },
     get(name) {
+      const override = getToolFactory?.({ name, definition: definitions.get(name) })
+      if (override instanceof Error) throw override
+      if (override !== undefined) return override
       return definitions.get(name)
     }
   }
@@ -561,6 +569,44 @@ test('an unrelated passive namespace colliding with a managed server stays passt
   disposeManaged()
 })
 
+test('transient exact-definition verification failure returns a disposer and leaves no provenance residue', () => {
+  let payloadReads = 0
+  const host = createHost({
+    getToolFactory({ name }) {
+      if (name !== 'mcp__same__managed') return undefined
+      payloadReads += 1
+      if (payloadReads === 2) return new Error('transient exact-definition read failed')
+    }
+  })
+  const adapter = createDshAdapter(host.ctx)
+  const disposeManaged = registerRouterServer(adapter, {
+    serverName: 'same',
+    routingHints: [],
+    getCatalog: () => [{ name: 'mcp__same__managed', description: 'managed' }],
+    activate: async () => 'managed'
+  })
+  const disposeManager = install(host)
+  const agent = host.createAgent('agent')
+  host.emit('agent/created', { agent })
+
+  let disposePublished
+  assert.doesNotThrow(() => {
+    disposePublished = registerRouterCompatibleTool(adapter, eagerTool('mcp__same__managed'))
+  })
+  assert.equal(typeof disposePublished, 'function')
+  assert.ok(host.visibleNames(agent).includes('mcp__same__managed'), 'uncertain provenance fails open')
+  host.emit('agent/turn-stopping', { agent })
+  assert.deepEqual(host.visibleNames(agent), [ROUTER_TOOL_NAME])
+
+  disposePublished()
+  assert.equal(host.definitions.has('mcp__same__managed'), false)
+  const disposeAgain = registerRouterCompatibleTool(adapter, eagerTool('mcp__same__managed'))
+  disposeAgain()
+  assert.equal(host.definitions.has('mcp__same__managed'), false)
+  disposeManager()
+  disposeManaged()
+})
+
 test('a transiently throwing old restriction handle is retained and retried during fail-open', () => {
   const disposalAttempts = new Map()
   const host = createHost({
@@ -605,6 +651,48 @@ test('a transiently throwing current restriction survives agent disposal for cle
   assert.doesNotThrow(disposeManager)
   assert.equal(disposalAttempts.get(1), 2)
   assert.equal(agent.restrictions.size, 0)
+})
+
+test('duplicate agent disposal retries and releases a retired transient restriction immediately', () => {
+  let disposalAttempts = 0
+  const host = createHost({
+    restrictionDisposeFactory({ defaultDispose }) {
+      return () => {
+        disposalAttempts += 1
+        if (disposalAttempts === 1) throw new Error('transient retired restriction')
+        defaultDispose()
+      }
+    }
+  })
+  const disposeManager = install(host)
+  host.register(eagerTool('mcp__alpha__echo'))
+  const agent = host.createAgent('agent')
+  host.emit('agent/created', { agent })
+
+  host.emit('agent/disposed', { agent })
+  assert.equal(agent.restrictions.size, 1)
+  host.emit('agent/disposed', { agent })
+  assert.equal(agent.restrictions.size, 0)
+  assert.equal(disposalAttempts, 2)
+  disposeManager()
+  assert.equal(disposalAttempts, 2, 'successfully retired record is not retained until manager cleanup')
+})
+
+test('fail-open reports incomplete restriction cleanup without claiming the agent is unrestricted', () => {
+  const host = createHost({
+    restrictionDisposeFactory() {
+      return () => { throw new Error('permanent restriction') }
+    }
+  })
+  const disposeManager = install(host)
+  host.register(eagerTool('mcp__alpha__echo'))
+  const agent = host.createAgent('agent')
+  host.emit('agent/created', { agent })
+  host.setSchemasError(new Error('force fail-open'))
+
+  assert.equal(host.logs.some(([, message]) => message.includes('cleanup incomplete')), true)
+  assert.equal(host.logs.some(([, message]) => message.includes('agent left unrestricted')), false)
+  assert.throws(disposeManager, /universal MCP manager cleanup failed/)
 })
 
 test('a permanently throwing old restriction is retained while the new handle is released', () => {
