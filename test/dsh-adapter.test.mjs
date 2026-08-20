@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { createDshAdapter } from '../lib/dsh-adapter.js'
+import { createDshAdapter, createUniversalDshAdapter } from '../lib/dsh-adapter.js'
 import { registerRouterServer } from '../lib/tool-router.js'
 
 function supportedContext() {
@@ -19,6 +19,58 @@ function supportedContext() {
     effect(factory, label) { calls.push(['effect', label, factory]) }
   }
 }
+
+function supportedUniversalContext({ schemas = true, get = true, restrict = true } = {}) {
+  const ctx = supportedContext()
+  const definitions = [{ name: 'ordinary' }]
+  const restrictions = []
+  if (schemas) ctx.tools.schemas = () => definitions
+  if (get) ctx.tools.get = (name) => definitions.find((definition) => definition.name === name)
+  const agent = { restrictions, ctx: { tools: {} } }
+  if (restrict) {
+    agent.ctx.tools.restrict = ({ deny }) => {
+      restrictions.push(deny)
+      return () => restrictions.pop()
+    }
+  }
+  ctx.createAgent = () => agent
+  return ctx
+}
+
+test('universal adapter projects global schemas and scoped restrictions', () => {
+  const ctx = supportedUniversalContext()
+  const adapter = createUniversalDshAdapter(ctx)
+  const agent = ctx.createAgent('a')
+  assert.equal(adapter.supported, true)
+  assert.deepEqual(adapter.listToolSchemas().map((schema) => schema.name), ['ordinary'])
+  assert.equal(adapter.getTool('ordinary').name, 'ordinary')
+  const lift = adapter.restrictAgentTools(agent, ['mcp__alpha__one'])
+  assert.deepEqual(agent.restrictions, [['mcp__alpha__one']])
+  lift()
+  assert.deepEqual(agent.restrictions, [])
+})
+
+for (const [name, options, missing] of [
+  ['tools.schemas', { schemas: false }, 'ctx.tools.schemas'],
+  ['tools.get', { get: false }, 'ctx.tools.get']
+]) {
+  test(`universal adapter reports missing ${name} without weakening base support`, () => {
+    const ctx = supportedUniversalContext(options)
+    const adapter = createUniversalDshAdapter(ctx)
+    assert.equal(adapter.supported, false)
+    assert.match(adapter.reason, new RegExp(missing.replace('.', '\\.') ))
+    assert.equal(createDshAdapter(ctx).supported, true)
+  })
+}
+
+test('universal adapter reports scoped restriction failure without mutating server adapter', () => {
+  const ctx = supportedUniversalContext({ restrict: false })
+  const adapter = createUniversalDshAdapter(ctx)
+  const agent = ctx.createAgent('a')
+  assert.equal(adapter.supported, true)
+  assert.throws(() => adapter.restrictAgentTools(agent, ['mcp__alpha__one']), /agent scoped tools\.restrict is unavailable/)
+  assert.equal(adapter.listToolSchemas()[0].name, 'ordinary')
+})
 
 test('supported DSH context is exposed through the stable adapter contract', () => {
   const ctx = supportedContext()
