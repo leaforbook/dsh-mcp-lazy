@@ -79,3 +79,33 @@ test('rejects a namespace atomically when any schema definition is unresolved', 
   assert.equal(catalog.servers.has('alpha'), false)
   assert.deepEqual([...catalog.passthrough], ['mcp__alpha__one', 'mcp__alpha__two'])
 })
+
+test('fails open when resolving one namespace throws and preserves unrelated servers', () => {
+  const catalog = buildMcpCatalog({
+    schemas: [
+      { name: 'mcp__alpha__one', description: 'runtime failure' },
+      { name: 'mcp__beta__one', description: 'healthy' }
+    ],
+    getDefinition: name => {
+      if (name === 'mcp__alpha__one') throw new Error('runtime failure')
+      return { name }
+    },
+    routerName: 'router'
+  })
+  assert.equal(catalog.servers.has('alpha'), false)
+  assert.deepEqual([...catalog.passthrough], ['mcp__alpha__one'])
+  assert.deepEqual([...catalog.servers.keys()], ['beta'])
+})
+
+test('rejects duplicate public schemas as an atomic namespace conflict', () => {
+  const catalog = buildMcpCatalog({
+    schemas: [
+      { name: 'mcp__alpha__one', description: 'first', parameters: { type: 'object' } },
+      { name: 'mcp__alpha__one', description: 'conflicting', parameters: { type: 'string' } }
+    ],
+    getDefinition: name => ({ name }),
+    routerName: 'router'
+  })
+  assert.equal(catalog.servers.has('alpha'), false)
+  assert.deepEqual([...catalog.passthrough], ['mcp__alpha__one'])
+})
