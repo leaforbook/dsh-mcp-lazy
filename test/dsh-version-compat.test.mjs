@@ -8,8 +8,13 @@ test('plugin imports host-owned peers for the requested DSH version', async (t) 
   const expected = process.env.DSH_COMPAT_VERSION
   if (!expected) return t.skip('DSH_COMPAT_VERSION is only set by compatibility CI')
   const { apply } = await import('../lib/index.js')
-  const actual = require('@deepseek-ai/dsh/package.json').version
-  assert.equal(actual, expected)
+  for (const packageName of [
+    '@deepseek-ai/dsh',
+    '@deepseek-ai/dsh-tools',
+    '@deepseek-ai/dsh-subprocess'
+  ]) {
+    assert.equal(require(`${packageName}/package.json`).version, expected, packageName)
+  }
   await assert.doesNotReject(() => apply({}, undefined))
 
   const definitions = new Map()

@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        dsh-version: [0.1.0-rc.6, 0.1.0-rc.7]
+        dsh-version: [0.1.0-rc.6, 0.1.0-rc.7, 0.1.0-rc.8]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -31,7 +31,7 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci --legacy-peer-deps --ignore-scripts
-      - run: npm install --no-save --ignore-scripts @deepseek-ai/dsh@${{ matrix.dsh-version }}
+      - run: npm install --no-save --ignore-scripts @deepseek-ai/dsh@${{ matrix.dsh-version }} @deepseek-ai/dsh-tools@${{ matrix.dsh-version }} @deepseek-ai/dsh-subprocess@${{ matrix.dsh-version }}
       - run: node --test test/dsh-version-compat.test.mjs
         env:
           DSH_COMPAT_VERSION: ${{ matrix.dsh-version }}
