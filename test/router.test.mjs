@@ -392,6 +392,99 @@ test('repeated native-owner cleanup retries an orphan after native handoff compl
   disposeManaged()
 })
 
+test('an old server cleanup handle cannot delete a newer registry with the same identity', async () => {
+  const host = throwingRegistryAdapter({})
+  const disposeOldServer = registerRouterServer(host.adapter, routerEntry('old-server'))
+  disposeOldServer()
+
+  let activations = 0
+  const disposeNewServer = registerRouterServer(host.adapter, {
+    ...routerEntry('new-server'),
+    activate: async () => { activations += 1; return 'new active' }
+  })
+  disposeOldServer()
+
+  let disposeVisibility
+  assert.doesNotThrow(() => {
+    disposeVisibility = registerRouterVisibility(host.adapter, {
+      getEntries: () => [],
+      reveal: () => 'not called'
+    })
+  })
+  await host.definitions.get(ROUTER_TOOL_NAME).execute(
+    { query: 'anything', serverName: 'new-server' },
+    { agent: { id: 'agent' }, signal: new AbortController().signal }
+  )
+  assert.equal(activations, 1)
+
+  disposeVisibility()
+  disposeNewServer()
+})
+
+test('an old visibility cleanup handle cannot delete a newer registry with the same identity', async () => {
+  const host = throwingRegistryAdapter({})
+  const disposeOldVisibility = registerRouterVisibility(host.adapter, {
+    getEntries: () => [],
+    reveal: () => 'old'
+  })
+  disposeOldVisibility()
+
+  let reveals = 0
+  const disposeNewVisibility = registerRouterVisibility(host.adapter, {
+    getEntries: () => [{
+      serverName: 'new-passive',
+      routingHints: [],
+      getCatalog: () => [{ name: 'mcp__new-passive__tool', description: 'new passive tool' }]
+    }],
+    reveal: () => { reveals += 1; return 'new revealed' }
+  })
+  disposeOldVisibility()
+
+  let disposeServer
+  assert.doesNotThrow(() => {
+    disposeServer = registerRouterServer(host.adapter, routerEntry('later-server'))
+  })
+  await host.definitions.get(ROUTER_TOOL_NAME).execute(
+    { query: 'new passive tool', serverName: 'new-passive' },
+    { agent: { id: 'agent' }, signal: new AbortController().signal }
+  )
+  assert.equal(reveals, 1)
+
+  disposeServer()
+  disposeNewVisibility()
+})
+
+test('an old native-owner cleanup handle cannot delete a newer registry with the same identity', async () => {
+  const host = throwingRegistryAdapter({})
+  const disposeOldServer = registerRouterServer(host.adapter, routerEntry('old-native-server'))
+  const disposeOldNative = registerRouterCompatibleTool(host.adapter, nativeRouterDefinition())
+  disposeOldNative()
+  disposeOldServer()
+
+  let activations = 0
+  const disposeNewServer = registerRouterServer(host.adapter, {
+    ...routerEntry('new-native-server'),
+    activate: async () => { activations += 1; return 'new active' }
+  })
+  disposeOldNative()
+
+  let disposeVisibility
+  assert.doesNotThrow(() => {
+    disposeVisibility = registerRouterVisibility(host.adapter, {
+      getEntries: () => [],
+      reveal: () => 'not called'
+    })
+  })
+  await host.definitions.get(ROUTER_TOOL_NAME).execute(
+    { query: 'anything', serverName: 'new-native-server' },
+    { agent: { id: 'agent' }, signal: new AbortController().signal }
+  )
+  assert.equal(activations, 1)
+
+  disposeVisibility()
+  disposeNewServer()
+})
+
 test('normal returned disposer still calls underlying cleanup when provenance notification fails', () => {
   const host = throwingRegistryAdapter({})
   const disposeManaged = registerRouterServer(host.adapter, {
