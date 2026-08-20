@@ -14,5 +14,11 @@ test('GitHub Actions verifies the promised Node and DSH compatibility matrices',
     workflow,
     /run:\s*npm install --no-save --ignore-scripts @deepseek-ai\/dsh@\$\{\{ matrix\.dsh-version \}\} @deepseek-ai\/dsh-tools@\$\{\{ matrix\.dsh-version \}\} @deepseek-ai\/dsh-subprocess@\$\{\{ matrix\.dsh-version \}\}/
   )
+  const dshCompat = workflow.match(/  dsh-compat:\n([\s\S]*)/)?.[1]
+  assert.ok(dshCompat, 'dsh-compat job must be present')
+  assert.match(
+    dshCompat,
+    /- run: node --test test\/dsh-version-compat\.test\.mjs\n\s+env:\n\s+DSH_COMPAT_VERSION: \$\{\{ matrix\.dsh-version \}\}/
+  )
   assert.match(workflow, /run:\s*npm test/)
 })
