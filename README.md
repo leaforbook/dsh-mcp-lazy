@@ -1,48 +1,26 @@
-# @yilinxiao/dsh-mcp-lazy
+# @yilinxiao/dsh-mcp-lazy 0.5.0
 
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的按需 MCP 桥接插件。它不会在启动时把 MCP 服务器的全部工具塞进工具目录，而是为每个服务器保留 `activate` 和 `deactivate` 两个控制工具，并在同一工具域共享一个 `mcp__router__search_and_activate` 路由工具。需要哪个服务器时，可让路由器搜索并激活，也可明确调用服务器自己的 `activate`；本轮结束后立即卸载远端工具 Schema，默认将连接保温 5 分钟以便下一轮复用。
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的 MCP Token 节省插件。0.5.0 安装后会自动发现并接管通过**兼容性准入**的 DSH MCP：在受管理 MCP 的工具面中，冷启动时模型默认只看到一个共享路由 `mcp__router__search_and_activate`；路由选中服务器后，才向当前会话做 **Schema 按需披露**。下一轮会重新隐藏，避免其他 MCP 的名称、说明和参数结构持续占用模型上下文。普通 DSH 工具不在本插件的过滤范围内。
 
-这样做主要是为了少占 TOKEN。工具的名称、说明和参数结构会随模型请求一起进入上下文。MCP 服务器越多、工具定义越长，常驻目录消耗的输入 TOKEN 就越多。这个插件让没用到的工具不进入当轮请求。
+这是 schema progressive disclosure（模型侧工具 Schema 的渐进披露），不是对第三方 MCP 进程的强制代理。对显式配置到本插件的服务器，仍提供完整的**连接层懒加载**（按需连接、轮末卸载 Schema、可保温复用连接）；其他兼容 DSH MCP 的连接、重试、附件和执行逻辑始终由原插件负责。
 
-## 工具定义本身能少多少 TOKEN
+## 自动接管的边界
 
-下面的数据来自三个真实 MCP 服务器，测试时间为 2026-08-18。“全量常驻”按 `@deepseek-ai/dsh-mcp-client` 的方式统计，“按需模式”按每个服务器未激活时的两个专用控制工具统计。0.4.0 新增的共享路由工具是整个 DSH 工具域一份固定开销，未计入各服务器行。TOKEN 使用 `cl100k_base` 统一计算，适合比较工具定义的前后差额。
+| MCP 类型 | Schema 行为 | 连接行为 | 失败行为 |
+| --- | --- | --- | --- |
+| 显式 `dsh-mcp-lazy` server | router 选择后仅向当前会话披露 | 按需启动并保温 | 保留原 lazy 错误并恢复隐藏状态 |
+| 通过兼容性准入的其他 DSH MCP | router 选择后仅向当前会话披露 | 原插件保持所有权 | fail-open，恢复原工具面 |
+| 不兼容或无法确认的 MCP | 完全不接管 | 完全不接管 | 完全保持 DSH 原样 |
 
-| MCP 服务器 | 全量常驻 | 按需模式未激活 | 全量工具定义 | 按需工具定义 | 每轮减少 | 工具定义降幅 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Chrome DevTools MCP 1.7.0 | 29 个工具 | 2 个工具 | 4,585 TOKEN | 200 TOKEN | 4,385 TOKEN | 95.6% |
-| Playwright MCP 0.0.79 | 24 个工具 | 2 个工具 | 3,452 TOKEN | 195 TOKEN | 3,257 TOKEN | 94.4% |
-| Filesystem MCP 2026.7.10 | 14 个工具 | 2 个工具 | 1,694 TOKEN | 190 TOKEN | 1,504 TOKEN | 88.8% |
-| 三个服务器合计 | 67 个工具 | 6 个工具 | 9,727 TOKEN | 581 TOKEN | 9,146 TOKEN | 94.0% |
+兼容性准入要求服务器的全部公开工具稳定匹配 `mcp__<serverName>__<toolName>`，能在 DSH 全局工具表中无歧义解析，并能被按会话原子隐藏和再次披露。**不兼容的 MCP 保持原样**：命名异常、冲突、目录不完整、DSH 能力不足或任一运行时不确定性都不会被强行接管。
 
-表里的 `94.0%` 只表示工具定义缩小了多少，不能当成整次请求的 TOKEN 降幅。整次请求还包括系统提示、聊天记录、用户消息和其他工具。上下文越长，这 9,146 TOKEN 在总输入里的占比就越小。
+这里的原则是 **fail-open**：无法证明“已隐藏的服务器一定可被路由和披露”时，就放弃该服务器的 Token 节省，恢复它原有的工具可见性和执行方式；不会为了省 Token 让工具消失或不可用。
 
-## 整次请求大约能省多少
+## Token 节省如何理解
 
-仍以三个服务器的合计数据为例，设 `C` 为工具定义之外的输入 TOKEN：
+工具的名称、说明和参数结构会随模型请求进入上下文。兼容 MCP 越多、工具 Schema 越大，冷启动时只保留一个路由工具的收益通常越明显；路由后披露的目标服务器仍会在随后的模型步骤占用其完整 Schema。这不是整次请求或账单的固定百分比，真实收益应从同类请求的 `prompt_tokens`、缓存命中和未命中数据中比较。
 
-- 全量常驻：约 `C + 9,727`
-- 按需未激活：约 `C + 581`
-- 输入降幅：约 `9,146 ÷ (C + 9,727)`
-
-| 其他上下文 `C` | 全量常驻总输入 | 按需未激活总输入 | 约减少 | 整次输入降幅 |
-| ---: | ---: | ---: | ---: | ---: |
-| 0 TOKEN | 9,727 TOKEN | 581 TOKEN | 9,146 TOKEN | 94.0% |
-| 10,000 TOKEN | 19,727 TOKEN | 10,581 TOKEN | 9,146 TOKEN | 46.4% |
-| 50,000 TOKEN | 59,727 TOKEN | 50,581 TOKEN | 9,146 TOKEN | 15.3% |
-| 100,000 TOKEN | 109,727 TOKEN | 100,581 TOKEN | 9,146 TOKEN | 8.3% |
-
-这里的绝对值仍是 `cl100k_base` 估算，不等同于 DeepSeek API 的精确 TOKEN。DeepSeek 还会把输入分成缓存命中和未命中两部分，两者的实际费用可能不同。要核算真实收益，应比较同类请求返回的 [`prompt_tokens`、`prompt_cache_hit_tokens` 和 `prompt_cache_miss_tokens`](https://api-docs.deepseek.com/zh-cn/api/create-chat-completion)，不能直接用单轮估算乘以轮数。
-
-## 什么时候省，什么时候不省
-
-- 服务器未激活时，每个服务器只保留两个专用控制工具，整个工具域另共享一个搜索激活路由器，仍是最省 TOKEN 的状态。
-- 激活服务器后，它的全部工具会在当前轮注册；这一轮仍要承担该服务器的工具定义 TOKEN。
-- 默认会在轮次结束时立即卸载远端工具 Schema；专用控制工具和共享路由器仍然可用。
-- 默认连接继续保温 5 分钟。保温期内再次激活会直接复用内存目录和现有连接，不重新启动 MCP 进程。
-- `releaseOnTurnEnd: false` 会让实际激活或调用过该服务器的会话成为跨轮次持有者；直到最后一个持有会话销毁前，Schema 和连接都会保持可用。
-- 如果服务器本来只有一两个很短的工具，按需模式的 TOKEN 优势可能很小。
-- `autoActivate: true` 会在启动时直接连接服务器，相当于关闭懒加载，不再节省这部分 TOKEN。
+0.4.0 曾在三个真实 MCP 上测得：67 个常驻工具定义约为 9,727 `cl100k_base` Token；旧的显式 lazy 冷态为 6 个控制工具、约 581 Token。0.5.0 的默认冷态改为统一路由和兼容 Schema 接管，不能直接沿用该旧比例；请在自己的 DSH profile 按下面的验证方法测量。
 
 ## 安装
 
@@ -52,11 +30,31 @@ dsh plugin --profile web add @yilinxiao/dsh-mcp-lazy
 
 推荐通过 npm 安装；源码与发布记录仍保存在 [GitHub](https://github.com/leaforbook/dsh-mcp-lazy)。
 
-安装时会加入一个默认停用的 `mcp-lazy` 配置占位，不会在缺少服务器参数时启动插件。完成下面的服务器配置后才会实际连接 MCP。
+安装包自带的 `cordis.patch.yml` 会启用唯一的 `mcp-lazy-manager`：
+
+```yaml
+- insert:
+    - id: mcp-lazy-manager
+      name: '@yilinxiao/dsh-mcp-lazy'
+      config:
+        mode: manager
+```
+
+它不需要任何 MCP URL、headers 或凭据。安装完成并重启 DSH 后，已安装的兼容 DSH MCP 会自动进入统一路由；不需要把它们逐个复制到本插件配置中。下面的显式 server 配置仅在你希望本插件自己拥有某个 MCP 的连接层懒加载时使用。
+
+### 关闭自动接管
+
+要恢复所有 MCP 的原有 schema 可见性，只禁用 manager 条目即可；显式 lazy server 配置不会受影响：
+
+```sh
+dsh plugin --profile web disable mcp-lazy-manager
+```
+
+也可以在对应 profile 的 patch 中移除或禁用 id 为 `mcp-lazy-manager` 的条目。无需卸载本 npm 包，也不要修改第三方 MCP 的配置、URL 或凭据。
 
 ## 配置
 
-在对应配置目录的 `cordis.patch.yml` 中，每个 MCP 服务器写一条配置：
+在对应配置目录的 `cordis.patch.yml` 中，可为需要**连接层懒加载**的 MCP 服务器另写一条显式配置：
 
 ```yaml
 - insert:
@@ -107,17 +105,27 @@ dsh plugin --profile web add @yilinxiao/dsh-mcp-lazy
 
 ## 工作原理
 
-1. 同一 DSH 工具域只注册一个 `mcp__router__search_and_activate`，每个服务器仍保留 `mcp__<server>__activate` 和 `mcp__<server>__deactivate`。路由器依次参考精确 `serverName`、完整工具前缀、`routingHints` 和已缓存目录；完整前缀先保留大小写做精确匹配，只有大小写折叠后的候选唯一时才回退匹配，因此 `Foo` / `foo` 之类的歧义不会被猜中。零匹配或最高分并列时同样不会激活任何服务器。
-   共享路由器的宿主注册归属于当前某个插件上下文；该 Cordis fiber 卸载而其他服务器仍存活时，注册会转移到一个存活上下文，仍保持每个工具域恰好一份。
-   如果已有配置使用 `serverName: router`，且该 MCP 原生提供 `search_and_activate`，两个工具会得到同一个公开名称。宿主注册表无法同时暴露同名工具，因此激活期间由原生工具占用该名称；原生工具卸载后自动恢复共享路由器，其他服务器自己的 `activate` / `deactivate` 始终可用。
-2. 路由器选中服务器或明确调用 `activate` 后，插件通过 `stdio` 或 `streamable-http` 连接服务器，带超时和页数上限分页读取 `tools/list`，再注册服务器提供的全部工具。激活结果只返回工具数量，不重复输出完整名称列表。
-3. 工具名沿用 `dsh-mcp-client` 的规则：`mcp__<server>__<tool>`。名称只保留 `[A-Za-z0-9_-]`，最长 64 个字符；出现冲突时追加 12 位哈希。
-4. `releaseOnTurnEnd: true` 时，默认在 `agent/turn-stopping` 立即卸载远端工具 Schema，并把连接保温 `warmIdleMs`；保温期再次激活会直接从内存目录恢复 Schema。设为 `false` 时，当前轮使用者与跨轮次持有者分别记录：轮次停止只清除当前轮需求，持有权一直保留到对应的 `agent/disposed`；多个持有者必须全部销毁才会释放，无关会话的销毁不产生影响。`autoActivate` 是独立的常驻所有权；显式 `deactivate` 和插件销毁始终立即关闭连接。
-5. 收到 `tools/list/changed` 后，插件先完整拉取并验证新目录，再按指纹差量更新：未变化的工具不重复注册，刷新失败则保留最后一次可用目录。每次发现都有单调递增的代次，较早的激活发现即使更晚返回也不能覆盖更新的刷新结果。保温且没有活跃使用者时只更新内存目录，不重新发布 Schema；并发通知会合并，刷新期间的新通知会在本次完成后再同步一次。
-6. 连接意外断开时会立即卸载失效工具。仍有当前轮使用者、跨轮次持有者（或启用了 `autoActivate`）时，插件按 `reconnectAttempts` 做有限自动重连，不会无限后台循环。
+1. manager 监听 DSH 的全局工具目录。通过兼容性准入的 `mcp__<server>__<tool>` 命名空间会被完整、原子地加入目录；普通工具、共享 router 名称、冲突名称和无法稳定解析的 MCP 都是 passthrough。
+2. 每个 agent 有独立 deny mask。冷态屏蔽所有已准入 MCP 的 schema，仅保留 `mcp__router__search_and_activate`；路由器选择一个服务器后，只从该 agent 的 deny mask 中移除该服务器。其他 agent 和其他 MCP 始终保持隐藏。
+3. `agent/turn-stopping` 会清除本轮选择并恢复完整 deny mask，`agent/disposed` 会清理该 agent 的 restriction。注册表变更、restriction 失败或目录验证失败时立即 fail-open，而不是留下半隐藏状态。
+4. 对显式 `dsh-mcp-lazy` server，路由器会按既有规则参考精确 `serverName`、完整工具前缀、`routingHints` 和缓存目录；匹配成功时再以 `stdio` 或 `streamable-http` 建连、发现并发布原生工具。`releaseOnTurnEnd: true` 时轮末卸载 Schema，`warmIdleMs` 内重用连接；`releaseOnTurnEnd: false` 和 `autoActivate` 保留现有持有语义。
+5. 对被动接管的第三方 DSH MCP，router 只披露已由原插件注册的同一份 ToolDefinition，绝不包装或替换执行器。因此 structured content、图片/附件、权限、审计、重试、重连与进程生命周期仍归原插件所有。
+
+## 验证自动接管
+
+1. 安装后重启 DSH，创建一个新的会话；在受管理 MCP 子集的冷态工具目录中应只呈现 `mcp__router__search_and_activate`，而已通过兼容性准入的 MCP 不会在模型请求中常驻。普通 DSH 工具保持可见。
+2. 让模型调用 router 并选择一个兼容服务器；下一步只会披露该服务器的工具，调用仍由原 MCP 执行。
+3. 结束该轮或新开会话，已披露工具应再次隐藏；另一会话不应继承前一会话的披露。
+4. 如发现某个 MCP 始终可见，先检查其公开名称、重复名称和 DSH 日志。这通常表示它未通过兼容性准入，属于预期的 passthrough，而不是功能失效。
+
+## 兼容性
+
+Universal manager 通过能力检测而不是版本字符串强制启用；缺少 `tools.schemas`、`tools.get` 或 agent scoped `tools.restrict` 时不会安装任何全局限制。CI 已对 DSH `0.1.0-rc.6、0.1.0-rc.7 和 0.1.0-rc.8` 执行插件导入、manager 生命周期和显式 lazy server 共存验证。升级 DSH 大版本后，建议先运行本仓库的兼容测试再在生产 profile 启用。
 
 ## 限制
 
+- 自动接管只优化模型侧 schema；它不会也不应停止、重启或代理不透明第三方 MCP 进程。需要按需启动连接时，请使用上面的显式 `dsh-mcp-lazy` server 配置。
+- 一个 MCP 只有在完整命名空间都可无歧义路由、隐藏和再次披露时才会被接管。不能证明安全性的服务器会保持可见，这是 fail-open 的设计结果。
 - 不支持必须以任务方式执行的工具，即 `tool.execution.taskSupport === 'required'`。遇到这类工具会直接返回错误。
 - 自动重连是有界的，且只在仍有连接需求时发生。超过预算后需重新调用 `activate`；成功调用任一服务器工具会恢复重连预算。
 - 保温只复用当前进程内的连接和工具目录，不写磁盘；进程重启后仍需重新发现。
@@ -130,7 +138,7 @@ npm ci --legacy-peer-deps --ignore-scripts
 npm test
 ```
 
-测试覆盖分页与游标保护、稳定指纹、差量更新、注册失败回滚、刷新通知合并，以及真实 stdio MCP 客户端/服务端的分页、调用和目录变更通知。
+测试覆盖兼容性准入、agent 隔离、动态目录、restriction fail-open、被动 MCP 原执行器保留、显式 lazy 生命周期，以及真实 stdio MCP 客户端/服务端的分页、调用和目录变更通知。CI 还覆盖 DSH rc.6、rc.7、rc.8 的宿主依赖图。
 
 ## 许可证
 

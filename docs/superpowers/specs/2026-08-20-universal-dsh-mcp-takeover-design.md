@@ -154,7 +154,7 @@ MCP-like provider registers an ambiguous, colliding, or unsupported surface
 
 ## Compatibility and security
 
-- Minimum supported DSH remains the tested rc.6/rc.7 range, but universal mode is capability-gated rather than version-string-gated.
+- Minimum supported DSH is the tested `0.1.0-rc.6`/`0.1.0-rc.7`/`0.1.0-rc.8` range, but universal mode is capability-gated rather than version-string-gated.
 - Catalog state contains schemas already present in the DSH tool registry, never MCP credentials or configuration files.
 - Agent selections use object identity/weak ownership rather than user-controlled string IDs, preventing one conversation from changing another conversation's visibility.
 - No MCP schema or complete tool-name list is returned in router results.
@@ -196,7 +196,7 @@ MCP-like provider registers an ambiguous, colliding, or unsupported surface
 ### Compatibility and real smoke tests
 
 - Run the complete Node test suite.
-- Run isolated host lifecycle tests against supported DSH rc.6 and rc.7 dependency graphs.
+- Run isolated host lifecycle tests against supported DSH rc.6, rc.7, and rc.8 dependency graphs.
 - Start the local DSH Web profile, verify root/API health, and use a real browser conversation to confirm: router-only cold schema, selective disclosure, cross-turn unload, cross-session isolation, and zero browser console errors.
 - Compare schema token counts before and after universal mode with at least two passive MCP servers and the existing managed MCP fixture.
 

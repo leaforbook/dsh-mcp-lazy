@@ -18,7 +18,7 @@
 - 不读取或重写 `cordis.yml`、`cordis.patch.yml`、URL、headers、env 或用户凭据。
 - Passive MCP 的原始 `ToolDefinition`、执行链、rich output、附件、权限和审计不可被包装或替换。
 - 显式 lazy server 的连接、重连、轮末卸载和 warm-idle 行为保持兼容。
-- Node 20/24 与 DSH `0.1.0-rc.6`/`0.1.0-rc.7` 兼容矩阵保持通过。
+- Node 20/24 与 DSH `0.1.0-rc.6`/`0.1.0-rc.7`/`0.1.0-rc.8` 兼容矩阵保持通过。
 
 ---
 
@@ -37,7 +37,7 @@
 - Create `test/fixtures/passive-tool-provider.mjs`: 无凭据的兼容/不兼容 DSH 工具提供方，供 host 与浏览器验收复用。
 - Modify `test/fixtures/plugin-host-harness.mjs`: 补齐真实 schema/get/restrict scope，以覆盖 manager 与 managed lazy 共存。
 - Modify `test/plugin-lifecycle.test.mjs`: real MCP fixture 的 universal 生命周期断言。
-- Modify `test/dsh-version-compat.test.mjs`: manager 配置在 rc.6/rc.7 host graph 的真实导入/清理测试。
+- Modify `test/dsh-version-compat.test.mjs`: manager 配置在 rc.6/rc.7/rc.8 host graph 的真实导入/清理测试。
 - Modify `test/readme-install.test.mjs`: 默认 manager bundle、安装说明与 fail-open 文档契约测试。
 - Modify `README.md`: 自动接管边界、兼容性准入、passive/managed 差异、关闭方式和验证方法。
 - Modify `package.json`, `package-lock.json`: minor version `0.5.0` 与发布元数据同步。
