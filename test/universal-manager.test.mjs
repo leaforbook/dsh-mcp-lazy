@@ -1,15 +1,19 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { createUniversalDshAdapter } from '../lib/dsh-adapter.js'
+import { createDshAdapter, createUniversalDshAdapter } from '../lib/dsh-adapter.js'
 import { installUniversalManager } from '../lib/universal-manager.js'
-import { ROUTER_TOOL_NAME } from '../lib/tool-router.js'
+import {
+  ROUTER_TOOL_NAME,
+  registerRouterCompatibleTool,
+  registerRouterServer
+} from '../lib/tool-router.js'
 
 function eagerTool(name, description = name, execute = async () => ({ content: [] })) {
   return { name, description, parameters: { type: 'object' }, execute }
 }
 
-function createHost({ listenerDisposeThrowsFor, restrictionFactory } = {}) {
+function createHost({ listenerDisposeThrowsFor, restrictionFactory, restrictionDisposeFactory } = {}) {
   const definitions = new Map()
   const schemaOnly = new Map()
   const listeners = new Map()
@@ -92,13 +96,20 @@ function createHost({ listenerDisposeThrowsFor, restrictionFactory } = {}) {
         const restriction = { deny: new Set(deny), active: true }
         restrictions.add(restriction)
         let active = true
-        return () => {
+        const defaultDispose = () => {
           if (!active) return
           active = false
           counters.restrictionDisposals += 1
           restriction.active = false
           restrictions.delete(restriction)
         }
+        return restrictionDisposeFactory?.({
+          agent,
+          deny,
+          restriction,
+          defaultDispose,
+          attempt: counters.restrictionAttempts
+        }) ?? defaultDispose
       }
     }
     return agent
@@ -152,6 +163,111 @@ function createTwoServerHost() {
   host.register(eagerTool('mcp__alpha__echo', 'echo alpha'))
   host.register(eagerTool('mcp__beta__search', 'search beta'))
   return { host, disposeManager }
+}
+
+function createFiberHost() {
+  const originalTools = {}
+  const definitions = new Map()
+  const listeners = new Map()
+  const fibers = new Map()
+
+  function emit(event, payload) {
+    for (const record of [...(listeners.get(event) ?? [])]) record.handler(payload)
+  }
+
+  function contextFor(name) {
+    const resources = new Set()
+    fibers.set(name, resources)
+    const tools = new Proxy(originalTools, {
+      get(target, property, receiver) {
+        if (property === Symbol.for('cordis.original')) return target
+        if (property === 'schemas') {
+          return () => [...definitions.values()].map(({ definition }) => {
+            const { name, description, parameters } = definition
+            return { name, description, parameters }
+          })
+        }
+        if (property === 'get') return toolName => definitions.get(toolName)?.definition
+        if (property !== 'register') return Reflect.get(target, property, receiver)
+        return definition => {
+          if (definitions.has(definition.name)) throw new Error(`duplicate tool: ${definition.name}`)
+          definitions.set(definition.name, { definition, fiber: name })
+          emit('tools/change')
+          let active = true
+          const dispose = () => {
+            if (!active) return
+            active = false
+            resources.delete(dispose)
+            if (definitions.get(definition.name)?.definition === definition) definitions.delete(definition.name)
+            emit('tools/change')
+          }
+          resources.add(dispose)
+          return dispose
+        }
+      }
+    })
+    return {
+      tools,
+      logger: { info() {}, warn() {}, error() {} },
+      on(event, handler) {
+        let bucket = listeners.get(event)
+        if (bucket === undefined) listeners.set(event, bucket = new Set())
+        const listener = { fiber: name, handler }
+        bucket.add(listener)
+        let active = true
+        const dispose = () => {
+          if (!active) return
+          active = false
+          resources.delete(dispose)
+          bucket.delete(listener)
+        }
+        resources.add(dispose)
+        return dispose
+      },
+      effect() { return () => {} }
+    }
+  }
+
+  function createAgent(id) {
+    const restrictions = new Set()
+    return {
+      id,
+      restrictions,
+      ctx: {
+        tools: {
+          restrict({ deny }) {
+            const restriction = new Set(deny)
+            restrictions.add(restriction)
+            return () => restrictions.delete(restriction)
+          }
+        }
+      }
+    }
+  }
+
+  function visibleNames(agent) {
+    const denied = new Set([...agent.restrictions].flatMap(item => [...item]))
+    return [...definitions.keys()].filter(name => !denied.has(name)).sort()
+  }
+
+  return {
+    contextFor,
+    createAgent,
+    visibleNames,
+    definitions,
+    emit,
+    registerProvider(definition) {
+      if (definitions.has(definition.name)) throw new Error(`duplicate tool: ${definition.name}`)
+      definitions.set(definition.name, { definition, fiber: 'provider' })
+      emit('tools/change')
+    },
+    unloadFiber(name) {
+      for (const dispose of [...fibers.get(name)].reverse()) dispose()
+    },
+    listenerFibers(event) {
+      return [...(listeners.get(event) ?? [])].map(record => record.fiber)
+    }
+  }
 }
 
 test('cold agents see only the router and disclosure is isolated to one agent', async () => {
@@ -240,11 +356,41 @@ test('manager owners share listeners and router until final cleanup restores all
   assert.equal(host.counters.listenerRegistrations, 4)
   first()
   assert.deepEqual(host.visibleNames(agent), [ROUTER_TOOL_NAME])
-  assert.equal(host.counters.listenerDisposals, 0)
+  assert.equal(host.counters.listenerDisposals, 4)
+  assert.equal(host.counters.listenerRegistrations, 8)
   second()
   assert.ok(host.visibleNames(agent).includes('mcp__alpha__echo'))
   assert.equal(host.definitions.has(ROUTER_TOOL_NAME), false)
-  assert.equal(host.counters.listenerDisposals, 4)
+  assert.equal(host.counters.listenerDisposals, 8)
+})
+
+test('resource ownership transfers across Cordis fibers without exposing already-restricted agents', () => {
+  const host = createFiberHost()
+  const firstCtx = host.contextFor('first')
+  const secondCtx = host.contextFor('second')
+  const disposeFirst = installUniversalManager(createUniversalDshAdapter(firstCtx))
+  const disposeSecond = installUniversalManager(createUniversalDshAdapter(secondCtx))
+  host.registerProvider(eagerTool('mcp__alpha__echo'))
+  const agent = host.createAgent('agent')
+  host.emit('agent/created', { agent })
+
+  assert.deepEqual(host.visibleNames(agent), [ROUTER_TOOL_NAME])
+  assert.equal(host.definitions.get(ROUTER_TOOL_NAME).fiber, 'first')
+  disposeFirst()
+  host.unloadFiber('first')
+
+  assert.deepEqual(host.visibleNames(agent), [ROUTER_TOOL_NAME])
+  assert.equal(host.definitions.get(ROUTER_TOOL_NAME).fiber, 'second')
+  for (const event of ['tools/change', 'agent/created', 'agent/turn-stopping', 'agent/disposed']) {
+    assert.deepEqual(host.listenerFibers(event), ['second'])
+  }
+
+  host.registerProvider(eagerTool('mcp__beta__search'))
+  assert.deepEqual(host.visibleNames(agent), [ROUTER_TOOL_NAME])
+  disposeSecond()
+  host.unloadFiber('second')
+  assert.ok(host.visibleNames(agent).includes('mcp__alpha__echo'))
+  assert.equal(host.definitions.has(ROUTER_TOOL_NAME), false)
 })
 
 test('nonstandard, unresolved, native-router-colliding, and atomic-invalid tools pass through', () => {
@@ -357,6 +503,185 @@ test('catalog uncertainty immediately fails open, redacts errors, and retries af
   host.emit('agent/turn-stopping', { agent })
   assert.deepEqual(host.visibleNames(agent), [ROUTER_TOOL_NAME])
   disposeManager()
+})
+
+test('a dynamic native router collision fails open synchronously and removal re-admits safely', async () => {
+  const host = createHost()
+  const adapter = createDshAdapter(host.ctx)
+  const disposeManager = install(host)
+  host.register(eagerTool('mcp__alpha__echo', 'echo alpha'))
+  host.register(eagerTool('mcp__beta__search', 'search beta'))
+  const agent = host.createAgent('agent')
+  host.emit('agent/created', { agent })
+  assert.deepEqual(host.visibleNames(agent), [ROUTER_TOOL_NAME])
+
+  const native = eagerTool(
+    ROUTER_TOOL_NAME,
+    'native collision',
+    async () => ({ content: [{ type: 'text', text: 'native router really executed' }] })
+  )
+  const disposeNative = registerRouterCompatibleTool(adapter, native)
+
+  assert.deepEqual(host.visibleNames(agent), [
+    ROUTER_TOOL_NAME,
+    'mcp__alpha__echo',
+    'mcp__beta__search'
+  ].sort())
+  const nativeResult = await host.call(agent, ROUTER_TOOL_NAME, { query: 'alpha' })
+  assert.equal(nativeResult.content[0].text, 'native router really executed')
+
+  disposeNative()
+  assert.deepEqual(host.visibleNames(agent), [ROUTER_TOOL_NAME])
+  const routed = await host.call(agent, ROUTER_TOOL_NAME, { query: 'alpha', serverName: 'alpha' })
+  assert.match(routed.content[0].text, /alpha/)
+  disposeManager()
+})
+
+test('an unrelated passive namespace colliding with a managed server stays passthrough on activation failure', async () => {
+  const host = createHost()
+  const adapter = createDshAdapter(host.ctx)
+  const disposeManaged = registerRouterServer(adapter, {
+    serverName: 'same',
+    routingHints: [],
+    getCatalog: () => [{ name: 'mcp__same__managed', description: 'managed' }],
+    activate: async () => { throw new Error('managed activation failed') }
+  })
+  const disposeManager = install(host)
+  host.register(eagerTool('mcp__same__third_party', 'third-party eager tool'))
+  const agent = host.createAgent('agent')
+  host.emit('agent/created', { agent })
+
+  assert.ok(host.visibleNames(agent).includes('mcp__same__third_party'))
+  await assert.rejects(
+    host.call(agent, ROUTER_TOOL_NAME, { query: 'managed', serverName: 'same' }),
+    /managed activation failed/
+  )
+  assert.ok(host.visibleNames(agent).includes('mcp__same__third_party'))
+  disposeManager()
+  disposeManaged()
+})
+
+test('a transiently throwing old restriction handle is retained and retried during fail-open', () => {
+  const disposalAttempts = new Map()
+  const host = createHost({
+    restrictionDisposeFactory({ defaultDispose, attempt }) {
+      return () => {
+        disposalAttempts.set(attempt, (disposalAttempts.get(attempt) ?? 0) + 1)
+        if (attempt === 1 && disposalAttempts.get(attempt) === 1) throw new Error('old transient dispose')
+        defaultDispose()
+      }
+    }
+  })
+  const disposeManager = install(host)
+  host.register(eagerTool('mcp__alpha__echo'))
+  const agent = host.createAgent('agent')
+  host.emit('agent/created', { agent })
+  host.register(eagerTool('mcp__beta__search'))
+
+  assert.equal(disposalAttempts.get(1), 2)
+  assert.equal(agent.restrictions.size, 0)
+  assert.ok(host.visibleNames(agent).includes('mcp__alpha__echo'))
+  disposeManager()
+})
+
+test('a transiently throwing current restriction survives agent disposal for cleanup retry', () => {
+  const disposalAttempts = new Map()
+  const host = createHost({
+    restrictionDisposeFactory({ defaultDispose, attempt }) {
+      return () => {
+        disposalAttempts.set(attempt, (disposalAttempts.get(attempt) ?? 0) + 1)
+        if (attempt === 1 && disposalAttempts.get(attempt) === 1) throw new Error('current transient dispose')
+        defaultDispose()
+      }
+    }
+  })
+  const disposeManager = install(host)
+  host.register(eagerTool('mcp__alpha__echo'))
+  const agent = host.createAgent('agent')
+  host.emit('agent/created', { agent })
+
+  host.emit('agent/disposed', { agent })
+  assert.equal(agent.restrictions.size, 1)
+  assert.doesNotThrow(disposeManager)
+  assert.equal(disposalAttempts.get(1), 2)
+  assert.equal(agent.restrictions.size, 0)
+})
+
+test('a permanently throwing old restriction is retained while the new handle is released', () => {
+  const disposalAttempts = new Map()
+  const host = createHost({
+    restrictionDisposeFactory({ defaultDispose, attempt }) {
+      return () => {
+        disposalAttempts.set(attempt, (disposalAttempts.get(attempt) ?? 0) + 1)
+        if (attempt === 1) throw new Error('old permanent dispose')
+        defaultDispose()
+      }
+    }
+  })
+  const disposeManager = install(host)
+  host.register(eagerTool('mcp__alpha__echo'))
+  const agent = host.createAgent('agent')
+  host.emit('agent/created', { agent })
+  host.register(eagerTool('mcp__beta__search'))
+
+  assert.equal(agent.restrictions.size, 1, 'only the permanently failing old handle remains')
+  assert.equal(disposalAttempts.get(2), 1, 'the new handle was released by fail-open')
+  host.emit('agent/disposed', { agent })
+  assert.throws(disposeManager, /universal MCP manager cleanup failed/)
+  assert.ok(disposalAttempts.get(1) >= 4)
+})
+
+test('a permanently throwing new restriction remains tracked after later fail-open', () => {
+  const disposalAttempts = new Map()
+  const host = createHost({
+    restrictionDisposeFactory({ defaultDispose, attempt }) {
+      return () => {
+        disposalAttempts.set(attempt, (disposalAttempts.get(attempt) ?? 0) + 1)
+        if (attempt === 2) throw new Error('new permanent dispose')
+        defaultDispose()
+      }
+    }
+  })
+  const disposeManager = install(host)
+  host.register(eagerTool('mcp__alpha__echo'))
+  const agent = host.createAgent('agent')
+  host.emit('agent/created', { agent })
+  host.register(eagerTool('mcp__beta__search'))
+  host.setSchemasError(new Error('force fail-open'))
+
+  assert.equal(agent.restrictions.size, 1)
+  host.emit('agent/disposed', { agent })
+  assert.throws(disposeManager, /universal MCP manager cleanup failed/)
+  assert.ok(disposalAttempts.get(2) >= 3)
+})
+
+test('a permanently throwing restriction is retained across fail-open, agent disposal, and final cleanup', () => {
+  let disposalAttempts = 0
+  const host = createHost({
+    restrictionDisposeFactory() {
+      return () => {
+        disposalAttempts += 1
+        throw new Error('permanent restriction dispose')
+      }
+    }
+  })
+  const disposeManager = install(host)
+  host.register(eagerTool('mcp__alpha__echo'))
+  const agent = host.createAgent('agent')
+  host.emit('agent/created', { agent })
+
+  host.setSchemasError(new Error('catalog failed'))
+  host.emit('agent/disposed', { agent })
+  assert.throws(disposeManager, error => {
+    assert.ok(error instanceof AggregateError)
+    assert.ok(error.errors.some(item => /permanent restriction dispose/.test(item.message)))
+    return true
+  })
+  assert.ok(disposalAttempts >= 3)
+  assert.equal(agent.restrictions.size, 1)
+  const beforeRetry = disposalAttempts
+  assert.throws(disposeManager, /cleanup retry failed/)
+  assert.equal(disposalAttempts, beforeRetry + 1)
 })
 
 test('cleanup attempts every disposer and throws AggregateError after listener cleanup failure', () => {

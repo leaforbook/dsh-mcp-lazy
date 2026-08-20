@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   ROUTER_TOOL_NAME,
+  getRouterEntryStatus,
   registerRouterCompatibleTool,
   registerRouterServer,
   registerRouterVisibility,
@@ -106,7 +107,9 @@ test('a managed server wins a passive name and activates before revealing', asyn
     getEntries: () => [{
       serverName: 'same',
       routingHints: [],
-      getCatalog: () => [{ name: 'mcp__same__passive', description: 'passive' }]
+      toolNames: ['mcp__same__managed'],
+      getDefinition: name => host.definitions.get(name),
+      getCatalog: () => [{ name: 'mcp__same__managed', description: 'managed' }]
     }],
     reveal: (agent, serverName) => {
       calls.push(['reveal', agent.id, serverName])
@@ -122,6 +125,24 @@ test('a managed server wins a passive name and activates before revealing', asyn
       return '已激活'
     }
   })
+  const publishedDefinition = {
+    name: 'mcp__same__managed',
+    description: 'managed',
+    parameters: { type: 'object' },
+    execute: async () => ({ content: [] })
+  }
+  const disposePublished = registerRouterCompatibleTool(host.adapter, publishedDefinition)
+
+  const passiveEntry = {
+    serverName: 'same',
+    toolNames: ['mcp__same__managed'],
+    getDefinition: name => host.definitions.get(name),
+    getCatalog: () => []
+  }
+  assert.deepEqual(getRouterEntryStatus(host.adapter, passiveEntry), { available: true, kind: 'managed' })
+  host.definitions.set('mcp__same__managed', { ...publishedDefinition })
+  assert.deepEqual(getRouterEntryStatus(host.adapter, passiveEntry), { available: true, kind: 'collision' })
+  host.definitions.set('mcp__same__managed', publishedDefinition)
 
   await host.definitions.get(ROUTER_TOOL_NAME).execute(
     { query: 'managed', serverName: 'same' },
@@ -129,6 +150,34 @@ test('a managed server wins a passive name and activates before revealing', asyn
   )
 
   assert.deepEqual(calls, [['activate', 'a', 'same'], ['reveal', 'a', 'same']])
+  disposePublished()
+  disposeManaged()
+  disposeVisibility()
+})
+
+test('an unproven passive namespace colliding with a managed name is classified as passthrough', () => {
+  const host = throwingRegistryAdapter({})
+  const passive = {
+    serverName: 'same',
+    routingHints: [],
+    toolNames: ['mcp__same__third_party'],
+    getCatalog: () => [{ name: 'mcp__same__third_party', description: 'third party' }]
+  }
+  const disposeVisibility = registerRouterVisibility(host.adapter, {
+    getEntries: () => [passive],
+    reveal: () => 'must not disclose collision'
+  })
+  const disposeManaged = registerRouterServer(host.adapter, {
+    serverName: 'same',
+    routingHints: [],
+    getCatalog: () => [{ name: 'mcp__same__managed', description: 'managed' }],
+    activate: async () => 'managed activation failed'
+  })
+
+  assert.deepEqual(getRouterEntryStatus(host.adapter, passive), {
+    available: true,
+    kind: 'collision'
+  })
   disposeManaged()
   disposeVisibility()
 })
